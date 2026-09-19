@@ -1,4 +1,4 @@
-import { Exercise, WorkoutPlan, ExerciseLogEntry, CompletedSession } from '../types';
+import { Exercise, WorkoutPlan, ExerciseLogEntry, CompletedSession, WorkoutDraft } from '../types';
 import { INITIAL_EXERCISES, INITIAL_PLANS, INITIAL_LOGS } from './defaultData';
 
 const DB_NAME = 'TraeningSystemDB';
@@ -401,6 +401,96 @@ export const StorageService = {
       });
     } catch {
       return getLocalFallback('sessions', []);
+    }
+  },
+
+  async deleteCompletedSession(id: string): Promise<void> {
+    try {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Server delete session error', err);
+    }
+
+    try {
+      const db = await openDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORES.SESSIONS, 'readwrite');
+        const store = tx.objectStore(STORES.SESSIONS);
+        const req = store.delete(id);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch {
+      const sessions = getLocalFallback<CompletedSession[]>('sessions', []);
+      setLocalFallback('sessions', sessions.filter((s) => s.id !== id));
+    }
+  },
+
+  // Active workout draft methods (supports resuming unfinished workouts)
+  async getActiveWorkoutDraft(): Promise<WorkoutDraft | null> {
+    // Check localStorage first for instant responsiveness
+    try {
+      const local = localStorage.getItem('traening_active_draft');
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (parsed && parsed.exercises && parsed.exercises.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // Try server/mongodb
+    try {
+      const res = await fetch('/api/active-draft');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.draft) {
+          try {
+            localStorage.setItem('traening_active_draft', JSON.stringify(data.draft));
+          } catch {
+            // ignore
+          }
+          return data.draft;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load active draft from server', err);
+    }
+
+    return null;
+  },
+
+  async saveActiveWorkoutDraft(draft: WorkoutDraft): Promise<void> {
+    try {
+      localStorage.setItem('traening_active_draft', JSON.stringify(draft));
+    } catch {
+      // ignore
+    }
+
+    try {
+      await fetch('/api/active-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draft }),
+      });
+    } catch (err) {
+      console.warn('Failed to save draft to server', err);
+    }
+  },
+
+  async clearActiveWorkoutDraft(): Promise<void> {
+    try {
+      localStorage.removeItem('traening_active_draft');
+    } catch {
+      // ignore
+    }
+
+    try {
+      await fetch('/api/active-draft', { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Failed to delete draft from server', err);
     }
   },
 

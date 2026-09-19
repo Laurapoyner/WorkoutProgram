@@ -1,15 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Calendar,
   Clock,
   CheckCircle2,
   TrendingUp,
   Dumbbell,
-  Layers,
-  ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Download,
   RotateCcw,
   Check,
+  Table as TableIcon,
+  LayoutGrid,
+  Search,
+  Filter,
+  Play,
+  Trash2,
+  AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import { CompletedSession, Exercise, ExerciseLogEntry } from '../types';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
@@ -19,6 +27,8 @@ interface HistoryLogViewProps {
   exercises: Exercise[];
   logs: ExerciseLogEntry[];
   onResetToDefaults?: () => void;
+  onResumeSession?: (session: CompletedSession) => void;
+  onDeleteSession?: (sessionId: string) => void;
 }
 
 export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
@@ -26,15 +36,61 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
   exercises,
   logs,
   onResetToDefaults,
+  onResumeSession,
+  onDeleteSession,
 }) => {
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedPlanFilter, setSelectedPlanFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'partial'>('all');
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [selectedExerciseForModal, setSelectedExerciseForModal] = useState<Exercise | null>(null);
-  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(
-    sessions.length > 0 ? sessions[0]?.id || null : null
-  );
 
-  const sortedSessions = [...sessions].sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-  );
+  // Extract unique plan titles for the filter dropdown
+  const uniquePlans = useMemo(() => {
+    const set = new Set<string>();
+    sessions.forEach((s) => {
+      if (s.planTitle) set.add(s.planTitle);
+    });
+    return Array.from(set);
+  }, [sessions]);
+
+  // Filter and sort sessions (newest first)
+  const filteredSessions = useMemo(() => {
+    return [...sessions]
+      .filter((session) => {
+        // Plan filter
+        if (selectedPlanFilter !== 'all' && session.planTitle !== selectedPlanFilter) {
+          return false;
+        }
+
+        // Status filter
+        const isPartial =
+          session.isPartial ||
+          session.status === 'partial' ||
+          session.exercisesCompletedCount < session.totalExercisesCount;
+        if (statusFilter === 'completed' && isPartial) return false;
+        if (statusFilter === 'partial' && !isPartial) return false;
+
+        // Search query
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const matchDate = session.date.toLowerCase().includes(q);
+          const matchPlan = session.planTitle.toLowerCase().includes(q);
+          const matchExercises = session.entries.some((e) =>
+            e.exerciseName.toLowerCase().includes(q)
+          );
+          return matchDate || matchPlan || matchExercises;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const timeA = a.completedAt ? new Date(a.completedAt).getTime() : new Date(a.date).getTime();
+        const timeB = b.completedAt ? new Date(b.completedAt).getTime() : new Date(b.date).getTime();
+        return timeB - timeA;
+      });
+  }, [sessions, selectedPlanFilter, statusFilter, searchQuery]);
 
   const handleExportJson = () => {
     const data = {
@@ -47,39 +103,101 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `traeningssystem-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `traeningspas-historik-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const formatSessionTime = (isoString?: string) => {
+    if (!isoString) return '';
+    try {
+      const d = new Date(isoString);
+      return d.toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
+
+  const formatDuration = (totalSec: number) => {
+    if (!totalSec || totalSec <= 0) return '-';
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    if (mins === 0) return `${secs} sek`;
+    return secs > 0 ? `${mins} m ${secs} s` : `${mins} min`;
+  };
+
+  // Extract highlights (highest weight or separate legs)
+  const getSessionWeightHighlights = (session: CompletedSession) => {
+    let maxKg = 0;
+    let unilateralCount = 0;
+    session.entries.forEach((e) => {
+      if (e.weightKg && e.weightKg > maxKg) maxKg = e.weightKg;
+      if (e.leftLegWeightKg && e.leftLegWeightKg > maxKg) maxKg = e.leftLegWeightKg;
+      if (e.rightLegWeightKg && e.rightLegWeightKg > maxKg) maxKg = e.rightLegWeightKg;
+      if (e.separateLegs) unilateralCount++;
+    });
+
+    if (maxKg > 0) {
+      return `${maxKg} kg max${unilateralCount > 0 ? ' (V/H fordelt)' : ''}`;
+    }
+    return 'Kropsvægt';
   };
 
   return (
     <div className="space-y-6">
       {/* Header Card */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="absolute top-0 left-0 w-24 h-1 bg-blue-600 rounded-br-full" />
 
         <div className="pt-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-              Træningshistorik & Resultater
+              Tidligere Træningspas
             </h2>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
               {sessions.length} pas gemt
             </span>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Alle dine afsluttede træningspas, tidsforbrug, belastningsudvikling for hvert ben og historiske noter.
+          <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+            Komplet oversigtstabel over dine gennemførte og delvist gennemførte træningspas. Du kan folde hvert pas ud for detaljer, eller genoptage et uafsluttet pas.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Top Controls: View Toggle & Export */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {/* View Mode Toggle */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold">
+            <button
+              onClick={() => setViewMode('table')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                viewMode === 'table'
+                  ? 'bg-white text-blue-700 shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <TableIcon className="w-3.5 h-3.5" />
+              <span>Tabelvisning</span>
+            </button>
+            <button
+              onClick={() => setViewMode('cards')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                viewMode === 'cards'
+                  ? 'bg-white text-blue-700 shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>Kortvisning</span>
+            </button>
+          </div>
+
           <button
             onClick={handleExportJson}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors border border-slate-200 shadow-xs"
             title="Eksporter alle data som JSON backup"
           >
             <Download className="w-3.5 h-3.5 text-blue-600" />
-            <span>Eksportér backup</span>
+            <span className="hidden sm:inline">Eksportér</span>
           </button>
 
           {onResetToDefaults && (
@@ -93,154 +211,528 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
               title="Genindlæs standarddata"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Gendan standard</span>
             </button>
           )}
         </div>
       </div>
 
-      {sortedSessions.length > 0 ? (
-        <div className="space-y-4">
-          {sortedSessions.map((session) => {
-            const isExpanded = expandedSessionId === session.id;
+      {/* Filter & Search Bar */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+        {/* Search input */}
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Søg i dato, program eller øvelsesnavn..."
+            className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
+            >
+              Ryd
+            </button>
+          )}
+        </div>
 
-            return (
-              <div
-                key={session.id}
-                className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs hover:border-blue-300 transition-all"
+        {/* Dropdown filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Plan filter */}
+          {uniquePlans.length > 1 && (
+            <div className="flex items-center gap-1.5">
+              <select
+                value={selectedPlanFilter}
+                onChange={(e) => setSelectedPlanFilter(e.target.value)}
+                className="text-xs font-medium bg-slate-50 text-slate-700 border border-slate-200 rounded-xl px-3 py-2 hover:bg-slate-100 transition-colors focus:outline-none focus:border-blue-500"
               >
-                {/* Session Header Clickable Card */}
-                <div
-                  onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
-                  className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-slate-50/70 transition-colors"
-                >
-                  <div className="flex items-start sm:items-center gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0">
-                      <Check className="w-5 h-5 stroke-[2.5]" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-900">
-                          {new Date(session.date).toLocaleDateString('da-DK', {
-                            weekday: 'long',
-                            day: 'numeric',
-                            month: 'long',
-                            year: 'numeric',
-                          })}
-                        </span>
-                        <span className="text-slate-300">•</span>
-                        <span className="text-xs text-blue-600 font-semibold">
-                          {session.planTitle}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                        <span className="flex items-center gap-1">
-                          <Dumbbell className="w-3.5 h-3.5 text-slate-400" />
-                          {session.exercisesCompletedCount} af {session.totalExercisesCount} øvelser udført
-                        </span>
-                        {session.durationSeconds > 0 && (
-                          <span className="flex items-center gap-1 text-slate-700 font-medium">
-                            <Clock className="w-3.5 h-3.5 text-blue-600" />
-                            {Math.floor(session.durationSeconds / 60)} min {session.durationSeconds % 60} sek
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                <option value="all">Alle programmer ({sessions.length})</option>
+                {uniquePlans.map((title) => (
+                  <option key={title} value={title}>
+                    {title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500 font-medium">
-                      {isExpanded ? 'Skjul øvelser' : 'Vis detaljer'}
-                    </span>
-                    <ChevronRight
-                      className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${
-                        isExpanded ? 'rotate-90 text-blue-600' : ''
-                      }`}
-                    />
-                  </div>
-                </div>
+          {/* Status filter */}
+          <div className="flex items-center gap-1.5">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              className="text-xs font-medium bg-slate-50 text-slate-700 border border-slate-200 rounded-xl px-3 py-2 hover:bg-slate-100 transition-colors focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">Alle statusser</option>
+              <option value="completed">Kun fuldførte</option>
+              <option value="partial">Kun delvist gennemførte</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
-                {/* Expanded exercise entries */}
-                {isExpanded && (
-                  <div className="p-5 pt-0 border-t border-slate-100 bg-slate-50/50 space-y-3">
-                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pt-3 pb-1">
-                      Registrerede øvelser i dette pas:
-                    </div>
+      {/* Main Content: Table View vs. Card View */}
+      {filteredSessions.length > 0 ? (
+        viewMode === 'table' ? (
+          /* ========================================================== */
+          /* TABLE VIEW                                                 */
+          /* ========================================================== */
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3.5 px-4">Dato & Tid</th>
+                    <th className="py-3.5 px-4">Træningsprogram</th>
+                    <th className="py-3.5 px-3">Status</th>
+                    <th className="py-3.5 px-4">Udførte øvelser</th>
+                    <th className="py-3.5 px-3">Varighed</th>
+                    <th className="py-3.5 px-4">Belastning</th>
+                    <th className="py-3.5 px-4 text-right">Handling</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredSessions.map((session) => {
+                    const isExpanded = expandedSessionId === session.id;
+                    const isPartial =
+                      session.isPartial ||
+                      session.status === 'partial' ||
+                      session.exercisesCompletedCount < session.totalExercisesCount;
+                    const timeStr = formatSessionTime(session.completedAt || session.startedAt);
 
-                    <div className="grid grid-cols-1 gap-2.5">
-                      {session.entries.map((entry) => {
-                        const originalEx = exercises.find((e) => e.id === entry.exerciseId);
-
-                        return (
-                          <div
-                            key={entry.id}
-                            className="p-3.5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                          >
-                            <div>
-                              <h5 className="font-bold text-slate-900 text-sm">{entry.exerciseName}</h5>
-                              <div className="flex flex-wrap items-center gap-2 text-slate-600 mt-1">
-                                {entry.separateLegs ? (
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                                      V: {entry.leftLegWeightKg ?? 0} kg ({entry.leftLegReps || entry.reps} reps)
-                                    </span>
-                                    <span>•</span>
-                                    <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                                      H: {entry.rightLegWeightKg ?? 0} kg ({entry.rightLegReps || entry.reps} reps)
-                                    </span>
+                    return (
+                      <React.Fragment key={session.id}>
+                        <tr
+                          className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${
+                            isExpanded ? 'bg-blue-50/30' : ''
+                          }`}
+                          onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                        >
+                          {/* Dato & Tid */}
+                          <td className="py-3.5 px-4 whitespace-nowrap font-medium text-slate-900">
+                            <div className="flex items-center gap-2">
+                              <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              <div>
+                                <div className="font-bold text-slate-900">
+                                  {new Date(session.date).toLocaleDateString('da-DK', {
+                                    weekday: 'short',
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                  })}
+                                </div>
+                                {timeStr && (
+                                  <div className="text-[10px] text-slate-400 font-mono">
+                                    Kl. {timeStr}
                                   </div>
-                                ) : (
-                                  <span>
-                                    {entry.sets} sæt × {entry.reps} gentagelser
-                                    {entry.weightKg !== undefined && entry.weightKg > 0
-                                      ? ` @ ${entry.weightKg} kg`
-                                      : ' (kropsvægt)'}
-                                  </span>
                                 )}
-
-                                {entry.durationSeconds ? (
-                                  <span className="text-slate-500">
-                                    • Tid: {Math.floor(entry.durationSeconds / 60)}m {entry.durationSeconds % 60}s
-                                  </span>
-                                ) : null}
                               </div>
+                            </div>
+                          </td>
 
-                              {entry.notes && (
-                                <p className="text-slate-500 italic mt-1 text-[11px]">
-                                  "{entry.notes}"
-                                </p>
+                          {/* Træningsprogram */}
+                          <td className="py-3.5 px-4 font-semibold text-slate-800">
+                            <span className="text-blue-700 bg-blue-50/70 border border-blue-100 px-2.5 py-1 rounded-lg inline-block">
+                              {session.planTitle}
+                            </span>
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3.5 px-3 whitespace-nowrap">
+                            {isPartial ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                Delvis ({session.exercisesCompletedCount}/{session.totalExercisesCount})
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                <Check className="w-3 h-3 text-emerald-600 stroke-[3]" />
+                                Fuldført ({session.exercisesCompletedCount}/{session.totalExercisesCount})
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Udførte øvelser Preview */}
+                          <td className="py-3.5 px-4">
+                            <div className="flex flex-wrap gap-1 max-w-xs sm:max-w-sm">
+                              {session.entries.slice(0, 3).map((entry) => (
+                                <span
+                                  key={entry.id}
+                                  className="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium truncate"
+                                  title={entry.exerciseName}
+                                >
+                                  {entry.exerciseName}
+                                </span>
+                              ))}
+                              {session.entries.length > 3 && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 font-bold">
+                                  +{session.entries.length - 3} flere
+                                </span>
                               )}
                             </div>
+                          </td>
 
-                            {originalEx && (
+                          {/* Varighed */}
+                          <td className="py-3.5 px-3 whitespace-nowrap font-mono text-slate-700">
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              {formatDuration(session.durationSeconds)}
+                            </span>
+                          </td>
+
+                          {/* Belastning Højdepunkt */}
+                          <td className="py-3.5 px-4 whitespace-nowrap font-medium text-slate-600">
+                            <span className="flex items-center gap-1.5">
+                              <Dumbbell className="w-3 h-3 text-slate-400" />
+                              {getSessionWeightHighlights(session)}
+                            </span>
+                          </td>
+
+                          {/* Handling Buttons */}
+                          <td
+                            className="py-3.5 px-4 text-right whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center justify-end gap-1.5">
+                              {/* Resume / Genoptag knap hvis passet er delvist eller man vil fortsætte */}
+                              {onResumeSession && (
+                                <button
+                                  type="button"
+                                  onClick={() => onResumeSession(session)}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                                    isPartial
+                                      ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-xs'
+                                      : 'bg-blue-50 hover:bg-blue-100 text-blue-700'
+                                  }`}
+                                  title={
+                                    isPartial
+                                      ? 'Genoptag og gør de resterende øvelser færdige'
+                                      : 'Gå i gang med dette træningspas igen'
+                                  }
+                                >
+                                  <Play className="w-3 h-3 fill-current" />
+                                  <span>{isPartial ? 'Gør færdig' : 'Genoptag'}</span>
+                                </button>
+                              )}
+
+                              {/* Toggle expand button */}
                               <button
-                                onClick={() => setSelectedExerciseForModal(originalEx)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold self-start sm:self-center transition-colors"
+                                type="button"
+                                onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-slate-100 transition-colors"
+                                title={isExpanded ? 'Skjul detaljer' : 'Vis detaljer'}
                               >
-                                <TrendingUp className="w-3.5 h-3.5 text-blue-600" />
-                                <span>Se fremgang</span>
+                                {isExpanded ? (
+                                  <ChevronUp className="w-4 h-4 text-blue-600" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4" />
+                                )}
                               </button>
-                            )}
-                          </div>
-                        );
-                      })}
+
+                              {/* Delete button */}
+                              {onDeleteSession && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm('Vil du slette dette træningspas fra historikken?')) {
+                                      onDeleteSession(session.id);
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                  title="Slet træningspas"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* Expandable detailed drawer row */}
+                        {isExpanded && (
+                          <tr className="bg-slate-50/70">
+                            <td colSpan={7} className="p-4 sm:p-5 border-t border-b border-slate-200">
+                              <div className="space-y-3 max-w-5xl">
+                                <div className="flex items-center justify-between">
+                                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                    <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                                    Registrerede øvelser i dette træningspas:
+                                  </div>
+
+                                  {onResumeSession && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onResumeSession(session)}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-xs"
+                                    >
+                                      <Play className="w-3.5 h-3.5 fill-current" />
+                                      <span>Gå i gang med træningen igen</span>
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                  {session.entries.map((entry) => {
+                                    const originalEx = exercises.find((e) => e.id === entry.exerciseId);
+
+                                    return (
+                                      <div
+                                        key={entry.id}
+                                        className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs flex flex-col justify-between gap-2 text-xs"
+                                      >
+                                        <div>
+                                          <div className="flex items-center justify-between gap-2">
+                                            <h5 className="font-bold text-slate-900 text-xs">
+                                              {entry.exerciseName}
+                                            </h5>
+                                            {originalEx && (
+                                              <button
+                                                type="button"
+                                                onClick={() => setSelectedExerciseForModal(originalEx)}
+                                                className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
+                                              >
+                                                <TrendingUp className="w-3 h-3" />
+                                                Fremgang
+                                              </button>
+                                            )}
+                                          </div>
+
+                                          <div className="flex flex-wrap items-center gap-2 text-slate-600 mt-1.5">
+                                            {entry.separateLegs ? (
+                                              <div className="flex items-center gap-1.5">
+                                                <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                                                  V: {entry.leftLegWeightKg ?? 0} kg ({entry.leftLegReps || entry.reps})
+                                                </span>
+                                                <span>•</span>
+                                                <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                                                  H: {entry.rightLegWeightKg ?? 0} kg ({entry.rightLegReps || entry.reps})
+                                                </span>
+                                              </div>
+                                            ) : (
+                                              <span>
+                                                {entry.sets} sæt × {entry.reps} gentagelser
+                                                {entry.weightKg !== undefined && entry.weightKg > 0
+                                                  ? ` @ ${entry.weightKg} kg`
+                                                  : ' (kropsvægt)'}
+                                              </span>
+                                            )}
+
+                                            {entry.durationSeconds ? (
+                                              <span className="text-slate-400 font-mono text-[11px]">
+                                                • {Math.floor(entry.durationSeconds / 60)}m {entry.durationSeconds % 60}s
+                                              </span>
+                                            ) : null}
+                                          </div>
+
+                                          {entry.notes && (
+                                            <p className="text-slate-500 italic mt-1.5 text-[11px] bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                                              "{entry.notes}"
+                                            </p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          /* ========================================================== */
+          /* CARD VIEW                                                  */
+          /* ========================================================== */
+          <div className="space-y-4">
+            {filteredSessions.map((session) => {
+              const isExpanded = expandedSessionId === session.id;
+              const isPartial =
+                session.isPartial ||
+                session.status === 'partial' ||
+                session.exercisesCompletedCount < session.totalExercisesCount;
+
+              return (
+                <div
+                  key={session.id}
+                  className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs hover:border-blue-300 transition-all"
+                >
+                  <div
+                    onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                    className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-slate-50/70 transition-colors"
+                  >
+                    <div className="flex items-start sm:items-center gap-3.5">
+                      <div
+                        className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+                          isPartial
+                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}
+                      >
+                        {isPartial ? (
+                          <Clock className="w-5 h-5 stroke-[2.5]" />
+                        ) : (
+                          <Check className="w-5 h-5 stroke-[2.5]" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-900">
+                            {new Date(session.date).toLocaleDateString('da-DK', {
+                              weekday: 'long',
+                              day: 'numeric',
+                              month: 'long',
+                              year: 'numeric',
+                            })}
+                          </span>
+                          <span className="text-slate-300">•</span>
+                          <span className="text-xs text-blue-600 font-semibold">
+                            {session.planTitle}
+                          </span>
+                          {isPartial && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                              Delvist gennemført
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                          <span className="flex items-center gap-1">
+                            <Dumbbell className="w-3.5 h-3.5 text-slate-400" />
+                            {session.exercisesCompletedCount} af {session.totalExercisesCount} øvelser udført
+                          </span>
+                          {session.durationSeconds > 0 && (
+                            <span className="flex items-center gap-1 text-slate-700 font-medium">
+                              <Clock className="w-3.5 h-3.5 text-blue-600" />
+                              {formatDuration(session.durationSeconds)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      {onResumeSession && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onResumeSession(session);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors"
+                        >
+                          <Play className="w-3 h-3 fill-current" />
+                          <span>Gå i gang igen</span>
+                        </button>
+                      )}
+
+                      <span className="text-xs text-slate-500 font-medium">
+                        {isExpanded ? 'Skjul' : 'Detaljer'}
+                      </span>
+                      {isExpanded ? (
+                        <ChevronUp className="w-4 h-4 text-blue-600" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-slate-400" />
+                      )}
                     </div>
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+
+                  {/* Expanded exercise entries */}
+                  {isExpanded && (
+                    <div className="p-5 pt-0 border-t border-slate-100 bg-slate-50/50 space-y-3">
+                      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pt-3 pb-1">
+                        Registrerede øvelser i dette pas:
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {session.entries.map((entry) => {
+                          const originalEx = exercises.find((e) => e.id === entry.exerciseId);
+
+                          return (
+                            <div
+                              key={entry.id}
+                              className="p-3.5 rounded-xl bg-white border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                            >
+                              <div>
+                                <h5 className="font-bold text-slate-900 text-sm">{entry.exerciseName}</h5>
+                                <div className="flex flex-wrap items-center gap-2 text-slate-600 mt-1">
+                                  {entry.separateLegs ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                                        V: {entry.leftLegWeightKg ?? 0} kg ({entry.leftLegReps || entry.reps} reps)
+                                      </span>
+                                      <span>•</span>
+                                      <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                                        H: {entry.rightLegWeightKg ?? 0} kg ({entry.rightLegReps || entry.reps} reps)
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span>
+                                      {entry.sets} sæt × {entry.reps} gentagelser
+                                      {entry.weightKg !== undefined && entry.weightKg > 0
+                                        ? ` @ ${entry.weightKg} kg`
+                                        : ' (kropsvægt)'}
+                                    </span>
+                                  )}
+
+                                  {entry.durationSeconds ? (
+                                    <span className="text-slate-500">
+                                      • Tid: {Math.floor(entry.durationSeconds / 60)}m {entry.durationSeconds % 60}s
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                {entry.notes && (
+                                  <p className="text-slate-500 italic mt-1 text-[11px]">
+                                    "{entry.notes}"
+                                  </p>
+                                )}
+                              </div>
+
+                              {originalEx && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedExerciseForModal(originalEx)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold self-start sm:self-center transition-colors"
+                                >
+                                  <TrendingUp className="w-3.5 h-3.5 text-blue-600" />
+                                  <span>Se fremgang</span>
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )
       ) : (
         <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-3 shadow-xs">
           <Calendar className="w-10 h-10 text-slate-400 mx-auto" />
-          <h3 className="text-base font-bold text-slate-900">Ingen gennemførte pas endnu</h3>
+          <h3 className="text-base font-bold text-slate-900">
+            {searchQuery || selectedPlanFilter !== 'all' || statusFilter !== 'all'
+              ? 'Ingen træningspas matcher dine filtre'
+              : 'Ingen gennemførte pas endnu'}
+          </h3>
           <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Gå til "Dagens Træning", udfør øvelserne og klik på "Gem træningspas". Dine resultater gemmes automatisk i databasen og vises her.
+            {searchQuery || selectedPlanFilter !== 'all' || statusFilter !== 'all'
+              ? 'Prøv at nulstille søgningen eller vælge et andet filter foroven.'
+              : 'Gå til "Dagens Pas", udfør øvelserne og klik på "Gem træningspas". Dine resultater gemmes automatisk i tabellen her.'}
           </p>
         </div>
       )}
 
+      {/* Exercise progress graph modal */}
       {selectedExerciseForModal && (
         <ExerciseProgressModal
           exercise={selectedExerciseForModal}

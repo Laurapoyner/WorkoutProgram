@@ -83,5 +83,21 @@ export interface CompletedSession {
   durationSeconds: number;
   exercisesCompletedCount: number;
   totalExercisesCount: number;
+  status?: 'completed' | 'partial';
+  isPartial?: boolean;
   entries: ExerciseLogEntry[];
+  remainingExercises?: PlanExercise[];
 }
+
+export interface WorkoutDraft {
+  id?: string;
+  planId: string;
+  planTitle: string;
+  workoutDate: string;
+  sessionSeconds: number;
+  lastUpdated: string;
+  exercises: PlanExercise[];
+  timers?: { [exerciseId: string]: { seconds: number; isRunning: boolean } };
+  isPartiallyCompleted?: boolean;
+}
+

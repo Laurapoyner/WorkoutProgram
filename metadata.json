@@ -1,6 +1,6 @@
 {
   "name": "Træningssystem & Genoptræning",
-  "description": "Træningssystem med øvelsesbibliotek, personlige træningsprogrammer, individuel ben-registrering og historisk fremgangsgraf.",
+  "description": "Træningssystem med øvelsesbibliotek, genoptagelse af uafsluttede pas, tabelvisning over tidligere træningspas, individuel ben-registrering og automatisk synkronisering.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

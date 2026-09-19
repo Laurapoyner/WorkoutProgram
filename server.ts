@@ -98,6 +98,7 @@ interface DBData {
   plans: any[];
   logs: any[];
   sessions: any[];
+  draft?: any;
 }
 
 function readLocalDB(): DBData {
@@ -109,7 +110,7 @@ function readLocalDB(): DBData {
   } catch (err) {
     console.error('Error reading db.json, returning empty defaults', err);
   }
-  return { exercises: [], plans: [], logs: [], sessions: [] };
+  return { exercises: [], plans: [], logs: [], sessions: [], draft: null };
 }
 
 function writeLocalDB(data: DBData): void {
@@ -411,6 +412,83 @@ app.post('/api/sessions', async (req, res) => {
   }
   writeLocalDB(db);
   res.json({ success: true, session, mode: 'local' });
+});
+
+app.delete('/api/sessions/:id', async (req, res) => {
+  const { id } = req.params;
+
+  if (mongoConnected && mongoDb) {
+    try {
+      await mongoDb.collection('sessions').deleteOne({ id });
+      return res.json({ success: true, id, mode: 'mongodb' });
+    } catch (err) {
+      console.warn('MongoDB error deleting session', err);
+    }
+  }
+
+  const db = readLocalDB();
+  db.sessions = (db.sessions || []).filter((s: any) => s.id !== id);
+  writeLocalDB(db);
+  res.json({ success: true, id, mode: 'local' });
+});
+
+// Active workout draft endpoints (allows resuming unfinished workouts)
+app.get('/api/active-draft', async (req, res) => {
+  if (mongoConnected && mongoDb) {
+    try {
+      const draft = await mongoDb.collection('drafts').findOne({ type: 'active_workout' }, { projection: { _id: 0 } });
+      if (draft) {
+        return res.json({ draft: draft.data });
+      }
+    } catch (err) {
+      console.warn('MongoDB error fetching active draft', err);
+    }
+  }
+
+  const db = readLocalDB();
+  res.json({ draft: db.draft || null });
+});
+
+app.post('/api/active-draft', async (req, res) => {
+  const { draft } = req.body;
+
+  if (mongoConnected && mongoDb) {
+    try {
+      if (draft) {
+        await mongoDb.collection('drafts').updateOne(
+          { type: 'active_workout' },
+          { $set: { type: 'active_workout', data: draft, updatedAt: new Date().toISOString() } },
+          { upsert: true }
+        );
+      } else {
+        await mongoDb.collection('drafts').deleteOne({ type: 'active_workout' });
+      }
+      return res.json({ success: true, mode: 'mongodb' });
+    } catch (err) {
+      console.warn('MongoDB error saving draft', err);
+    }
+  }
+
+  const db = readLocalDB();
+  db.draft = draft || null;
+  writeLocalDB(db);
+  res.json({ success: true, mode: 'local' });
+});
+
+app.delete('/api/active-draft', async (req, res) => {
+  if (mongoConnected && mongoDb) {
+    try {
+      await mongoDb.collection('drafts').deleteOne({ type: 'active_workout' });
+      return res.json({ success: true, mode: 'mongodb' });
+    } catch (err) {
+      console.warn('MongoDB error deleting draft', err);
+    }
+  }
+
+  const db = readLocalDB();
+  db.draft = null;
+  writeLocalDB(db);
+  res.json({ success: true, mode: 'local' });
 });
 
 // Direct Image Upload Endpoint

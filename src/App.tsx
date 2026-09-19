@@ -48,6 +48,7 @@ export default function App() {
   const [plans, setPlans] = useState<WorkoutPlan[]>(INITIAL_PLANS);
   const [logs, setLogs] = useState<ExerciseLogEntry[]>(INITIAL_LOGS);
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
+  const [sessionToResume, setSessionToResume] = useState<CompletedSession | null>(null);
   const [activePlanId, setActivePlanId] = useState<string>('plan-kneerehab');
   const [dbStatus, setDbStatus] = useState<{
     type: string;
@@ -207,9 +208,26 @@ export default function App() {
     setLogs((prev) => [...session.entries, ...prev]);
     await StorageService.addCompletedSession(session);
     showToast(
-      `Flot klaret! Dagens pas blev gemt med ${session.exercisesCompletedCount} øvelser i databasen.`
+      session.isPartial
+        ? `Delvist pas gemt (${session.exercisesCompletedCount} øvelser). Du kan genoptage det når som helst fra tabellen!`
+        : `Flot klaret! Dagens pas blev gemt med ${session.exercisesCompletedCount} øvelser i databasen.`
     );
     setActiveTab('history');
+  };
+
+  const handleResumeSession = (session: CompletedSession) => {
+    setSessionToResume(session);
+    if (session.planId) {
+      setActivePlanId(session.planId);
+    }
+    setActiveTab('active');
+    showToast(`Genoptager træningspas: "${session.planTitle}"`);
+  };
+
+  const handleDeleteSession = async (sessionId: string) => {
+    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    await StorageService.deleteCompletedSession(sessionId);
+    showToast('Træningspasset blev slettet');
   };
 
   const handleResetToDefaults = async () => {
@@ -243,8 +261,8 @@ export default function App() {
     },
     {
       id: 'history' as TabType,
-      label: 'Historik & Grafer',
-      sublabel: 'Gemte resultater',
+      label: 'Tidligere Pas',
+      sublabel: 'Tabel & resultater',
       icon: Calendar,
     },
   ];
@@ -519,6 +537,9 @@ export default function App() {
               allExercises={exercises}
               allLogs={logs}
               onUpdateExercise={handleSaveExercise}
+              resumeSession={sessionToResume}
+              onClearResumeSession={() => setSessionToResume(null)}
+              onToast={(msg) => showToast(msg)}
             />
           )}
 
@@ -554,6 +575,8 @@ export default function App() {
               exercises={exercises}
               logs={logs}
               onResetToDefaults={handleResetToDefaults}
+              onResumeSession={handleResumeSession}
+              onDeleteSession={handleDeleteSession}
             />
           )}
         </main>

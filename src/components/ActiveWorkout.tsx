@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -17,11 +17,15 @@ import {
   Check,
   ChevronRight,
   ArrowRight,
+  BookmarkCheck,
+  HelpCircle,
+  X,
 } from 'lucide-react';
-import { WorkoutPlan, PlanExercise, ExerciseLogEntry, CompletedSession, Exercise } from '../types';
+import { WorkoutPlan, PlanExercise, ExerciseLogEntry, CompletedSession, Exercise, WorkoutDraft } from '../types';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
 import { ImageUploadModal } from './ImageUploadModal';
 import { getExerciseImageStyle } from '../utils/imageStyle';
+import { StorageService } from '../db/storage';
 
 interface ActiveWorkoutProps {
   plans: WorkoutPlan[];
@@ -31,6 +35,9 @@ interface ActiveWorkoutProps {
   allExercises: Exercise[];
   allLogs: ExerciseLogEntry[];
   onUpdateExercise?: (exercise: Exercise) => void;
+  resumeSession?: CompletedSession | null;
+  onClearResumeSession?: () => void;
+  onToast?: (msg: string) => void;
 }
 
 export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
@@ -41,6 +48,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   allExercises,
   allLogs,
   onUpdateExercise,
+  resumeSession,
+  onClearResumeSession,
+  onToast,
 }) => {
   const currentPlan = plans.find((p) => p.id === activePlanId) || plans[0];
 
@@ -61,27 +71,180 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const [timers, setTimers] = useState<{ [exerciseId: string]: { seconds: number; isRunning: boolean } }>({});
   const timerIntervalRef = useRef<number | null>(null);
 
+  // Draft and resumption state
+  const [isDraftLoaded, setIsDraftLoaded] = useState(false);
+  const [draftBannerVisible, setDraftBannerVisible] = useState(false);
+  const [draftBannerMessage, setDraftBannerMessage] = useState<string | null>(null);
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+  const [showPartialModal, setShowPartialModal] = useState(false);
+
   // Modals
   const [inspectExercise, setInspectExercise] = useState<Exercise | null>(null);
   const [exerciseForImageUpload, setExerciseForImageUpload] = useState<Exercise | null>(null);
 
-  // Initialize session exercises when current plan changes
+  // Track if user has initialized to avoid overwriting ongoing progress
+  const hasInitializedRef = useRef(false);
+
+  // 1. Initial Load: Check for resumeSession or stored active draft
   useEffect(() => {
-    if (currentPlan) {
+    async function initSession() {
+      if (hasInitializedRef.current) return;
+
+      // Case A: User explicitly clicked "Genoptag / Gør færdig" on a past session
+      if (resumeSession) {
+        hasInitializedRef.current = true;
+        if (resumeSession.planId && resumeSession.planId !== activePlanId) {
+          onChangePlan(resumeSession.planId);
+        }
+
+        const targetPlan = plans.find((p) => p.id === resumeSession.planId) || currentPlan;
+        if (targetPlan) {
+          const mapped = targetPlan.exercises.map((pe) => {
+            const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+            const loggedEntry = resumeSession.entries.find((e) => e.exerciseId === pe.exerciseId);
+
+            if (loggedEntry) {
+              return {
+                ...pe,
+                imageUrl: baseEx?.imageUrl || pe.imageUrl,
+                imagePosition: baseEx?.imagePosition || pe.imagePosition,
+                sets: loggedEntry.sets || pe.sets,
+                reps: loggedEntry.reps || pe.reps,
+                weightKg: loggedEntry.weightKg ?? pe.weightKg,
+                separateLegs: loggedEntry.separateLegs ?? pe.separateLegs,
+                leftLegWeightKg: loggedEntry.leftLegWeightKg ?? pe.leftLegWeightKg,
+                leftLegReps: loggedEntry.leftLegReps ?? pe.leftLegReps,
+                rightLegWeightKg: loggedEntry.rightLegWeightKg ?? pe.rightLegWeightKg,
+                rightLegReps: loggedEntry.rightLegReps ?? pe.rightLegReps,
+                notes: loggedEntry.notes ?? pe.notes,
+                isCompleted: true,
+                activeTimerSeconds: loggedEntry.durationSeconds || 0,
+              };
+            }
+
+            return {
+              ...pe,
+              imageUrl: baseEx?.imageUrl || pe.imageUrl,
+              imagePosition: baseEx?.imagePosition || pe.imagePosition,
+              isCompleted: false,
+              activeTimerSeconds: 0,
+            };
+          });
+
+          setSessionExercises(mapped);
+          setSessionSeconds(resumeSession.durationSeconds || 0);
+          setWorkoutDate(new Date().toISOString().split('T')[0]);
+          setDraftBannerMessage(
+            `Genoptaget pas fra ${new Date(resumeSession.date).toLocaleDateString('da-DK')}: De allerede udførte øvelser er markeret med flueben. Færdiggør de resterende herunder!`
+          );
+          setDraftBannerVisible(true);
+          setIsDraftLoaded(true);
+
+          if (onClearResumeSession) onClearResumeSession();
+          return;
+        }
+      }
+
+      // Case B: Check for automatic active draft in database or localStorage
+      try {
+        const draft = await StorageService.getActiveWorkoutDraft();
+        if (draft && draft.exercises && draft.exercises.length > 0) {
+          // Check if draft has some meaningful progress
+          const hasProgress =
+            draft.sessionSeconds > 0 ||
+            draft.exercises.some(
+              (e) =>
+                e.isCompleted ||
+                (e.notes && e.notes.length > 0) ||
+                (e.weightKg !== undefined && e.weightKg > 0) ||
+                (e.leftLegWeightKg !== undefined && e.leftLegWeightKg > 0) ||
+                (e.rightLegWeightKg !== undefined && e.rightLegWeightKg > 0)
+            );
+
+          if (hasProgress) {
+            hasInitializedRef.current = true;
+            if (draft.planId && draft.planId !== activePlanId) {
+              onChangePlan(draft.planId);
+            }
+
+            // Merge image positions from current allExercises in case images were updated
+            const refreshedDraftExercises = draft.exercises.map((pe) => {
+              const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+              return {
+                ...pe,
+                imageUrl: baseEx?.imageUrl || pe.imageUrl,
+                imagePosition: baseEx?.imagePosition || pe.imagePosition,
+              };
+            });
+
+            setSessionExercises(refreshedDraftExercises);
+            setSessionSeconds(draft.sessionSeconds || 0);
+            if (draft.workoutDate) setWorkoutDate(draft.workoutDate);
+            if (draft.timers) setTimers(draft.timers);
+
+            const updatedTime = draft.lastUpdated
+              ? new Date(draft.lastUpdated).toLocaleTimeString('da-DK', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : 'for nylig';
+
+            const doneCount = refreshedDraftExercises.filter((e) => e.isCompleted).length;
+            setDraftBannerMessage(
+              `Uafsluttet træningspas fundet (${doneCount} af ${refreshedDraftExercises.length} øvelser udført • gemt kl. ${updatedTime}). Du kan fortsætte hvor du slap!`
+            );
+            setDraftBannerVisible(true);
+            setIsDraftLoaded(true);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Error reading active draft', err);
+      }
+
+      // Case C: Fresh initial workout from currentPlan
+      if (currentPlan) {
+        hasInitializedRef.current = true;
+        setSessionExercises(
+          currentPlan.exercises.map((pe) => {
+            const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+            return {
+              ...pe,
+              imageUrl: baseEx?.imageUrl || pe.imageUrl,
+              imagePosition: baseEx?.imagePosition || pe.imagePosition,
+              isCompleted: false,
+              activeTimerSeconds: 0,
+            };
+          })
+        );
+        setIsDraftLoaded(true);
+      }
+    }
+
+    initSession();
+  }, [resumeSession, activePlanId, allExercises]);
+
+  // When changing plan manually (and not in initial resume/draft load)
+  const handleSwitchPlan = (newPlanId: string) => {
+    onChangePlan(newPlanId);
+    const plan = plans.find((p) => p.id === newPlanId);
+    if (plan) {
       setSessionExercises(
-        currentPlan.exercises.map((pe) => {
-          // match latest image from allExercises if available
+        plan.exercises.map((pe) => {
           const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
           return {
             ...pe,
             imageUrl: baseEx?.imageUrl || pe.imageUrl,
+            imagePosition: baseEx?.imagePosition || pe.imagePosition,
             isCompleted: false,
             activeTimerSeconds: 0,
           };
         })
       );
+      setDraftBannerVisible(false);
+      StorageService.clearActiveWorkoutDraft();
     }
-  }, [currentPlan?.id, allExercises]);
+  };
 
   // Overall session timer tick
   useEffect(() => {
@@ -117,6 +280,57 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
   }, []);
+
+  // AUTO-SAVE DRAFT: Automatically save changes whenever exercises or timer changes
+  const saveDraftToStorage = useCallback(
+    async (exercisesToSave: PlanExercise[], seconds: number) => {
+      if (!currentPlan || exercisesToSave.length === 0) return;
+
+      const hasActivity =
+        seconds > 0 ||
+        exercisesToSave.some(
+          (e) =>
+            e.isCompleted ||
+            (e.notes && e.notes.length > 0) ||
+            (e.weightKg !== undefined && e.weightKg > 0) ||
+            (e.leftLegWeightKg !== undefined && e.leftLegWeightKg > 0) ||
+            (e.rightLegWeightKg !== undefined && e.rightLegWeightKg > 0)
+        );
+
+      if (!hasActivity) return;
+
+      const draft: WorkoutDraft = {
+        planId: currentPlan.id,
+        planTitle: currentPlan.title,
+        workoutDate,
+        sessionSeconds: seconds,
+        lastUpdated: new Date().toISOString(),
+        exercises: exercisesToSave,
+        timers,
+      };
+
+      try {
+        await StorageService.saveActiveWorkoutDraft(draft);
+        setLastSavedTime(
+          new Date().toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })
+        );
+      } catch (err) {
+        console.warn('Auto-save draft failed', err);
+      }
+    },
+    [currentPlan, workoutDate, timers]
+  );
+
+  // Debounce auto-saving draft on changes
+  useEffect(() => {
+    if (!isDraftLoaded || sessionExercises.length === 0) return;
+
+    const timer = setTimeout(() => {
+      saveDraftToStorage(sessionExercises, sessionSeconds);
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [sessionExercises, sessionSeconds, isDraftLoaded, saveDraftToStorage]);
 
   const formatTimer = (totalSec: number) => {
     const mins = Math.floor(totalSec / 60);
@@ -185,14 +399,78 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const totalCount = sessionExercises.length;
   const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-  const handleFinishWorkout = () => {
+  // Explicit action: Pause and save draft for later
+  const handlePauseAndSaveDraft = async () => {
+    setIsSessionTimerRunning(false);
+    // Pause any individual timers
+    setTimers((prev) => {
+      const next = { ...prev };
+      Object.keys(next).forEach((k) => {
+        next[k] = { ...next[k], isRunning: false };
+      });
+      return next;
+    });
+
+    await saveDraftToStorage(sessionExercises, sessionSeconds);
+    if (onToast) {
+      onToast('Træningspas er sat på pause og gemt som kladde! Du kan fortsætte når du vil.');
+    } else {
+      alert('Træningspas er sat på pause og gemt som kladde! Du kan fortsætte når som helst.');
+    }
+  };
+
+  // Reset to plan defaults (start fresh)
+  const handleResetToFresh = async () => {
+    if (confirm('Vil du nulstille og starte dette træningspas forfra? Den nuværende kladde vil blive ryddet.')) {
+      setIsSessionTimerRunning(false);
+      setSessionSeconds(0);
+      setTimers({});
+      await StorageService.clearActiveWorkoutDraft();
+      setDraftBannerVisible(false);
+
+      if (currentPlan) {
+        setSessionExercises(
+          currentPlan.exercises.map((pe) => {
+            const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+            return {
+              ...pe,
+              imageUrl: baseEx?.imageUrl || pe.imageUrl,
+              imagePosition: baseEx?.imagePosition || pe.imagePosition,
+              isCompleted: false,
+              activeTimerSeconds: 0,
+            };
+          })
+        );
+      }
+      if (onToast) onToast('Træningspas nulstillet til start');
+    }
+  };
+
+  // User triggers "Gem træningspas"
+  const handleFinishWorkoutClick = () => {
     if (completedCount === 0) {
       if (!confirm('Du har ikke markeret nogen øvelser som udført endnu. Vil du alligevel gemme dagens pas?')) {
         return;
       }
+      completeAndSaveSession(false);
+      return;
     }
 
+    // If not all exercises are completed, prompt the user with choices
+    if (completedCount < totalCount) {
+      setShowPartialModal(true);
+      return;
+    }
+
+    // All exercises completed
+    completeAndSaveSession(false);
+  };
+
+  // Complete and commit session to history & database
+  const completeAndSaveSession = async (isPartial: boolean) => {
+    setShowPartialModal(false);
     const completedTimestamp = Date.now();
+
     const logEntries: ExerciseLogEntry[] = sessionExercises
       .filter((e) => e.isCompleted)
       .map((e) => ({
@@ -225,11 +503,16 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       durationSeconds: sessionSeconds,
       exercisesCompletedCount: completedCount,
       totalExercisesCount: totalCount,
+      status: isPartial ? 'partial' : 'completed',
+      isPartial: isPartial,
       entries: logEntries,
+      remainingExercises: pendingExercises,
     };
 
-    onCompleteWorkout(session);
+    // Clear active draft since session is logged
+    await StorageService.clearActiveWorkoutDraft();
     setIsSessionTimerRunning(false);
+    onCompleteWorkout(session);
   };
 
   const openImageModalForExercise = (planEx: PlanExercise) => {
@@ -256,9 +539,43 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Session Header Card */}
+      {/* 1. RESUME / ONGOING DRAFT REASSURANCE BANNER */}
+      {draftBannerVisible && draftBannerMessage && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in duration-300">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-200/80 flex items-center justify-center text-amber-800 shrink-0 mt-0.5 sm:mt-0">
+              <RotateCcw className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="font-bold text-xs flex items-center gap-2">
+                <span>Igangværende træningspas indlæst</span>
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+              </div>
+              <p className="text-xs text-amber-800/90 mt-0.5">{draftBannerMessage}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+            <button
+              onClick={() => setDraftBannerVisible(false)}
+              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-xs transition-colors"
+            >
+              Fortsæt her
+            </button>
+            <button
+              onClick={handleResetToFresh}
+              className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-900 font-semibold text-xs border border-amber-300 transition-colors"
+              title="Nulstil og start helt forfra"
+            >
+              Start forfra
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 2. SESSION HEADER CARD */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 relative overflow-hidden">
-        {/* Blue accent top line matching the ModuleX screenshot */}
+        {/* Blue accent top line */}
         <div className="absolute top-0 left-0 w-24 h-1 bg-blue-600 rounded-br-full" />
 
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
@@ -273,6 +590,15 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               <span className="text-xs font-medium text-slate-500">
                 {currentPlan.frequency || '3-4 gange ugentligt'}
               </span>
+              {lastSavedTime && (
+                <>
+                  <span className="text-xs text-slate-400">•</span>
+                  <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-medium flex items-center gap-1 border border-emerald-100">
+                    <BookmarkCheck className="w-3 h-3 text-emerald-600" />
+                    Kladde gemt ({lastSavedTime})
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -285,7 +611,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                   <select
                     id="plan-selector-dropdown"
                     value={activePlanId}
-                    onChange={(e) => onChangePlan(e.target.value)}
+                    onChange={(e) => handleSwitchPlan(e.target.value)}
                     className="text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200 rounded-xl px-3 py-1.5 hover:bg-slate-100 transition-colors focus:outline-none focus:border-blue-500"
                   >
                     {plans.map((p) => (
@@ -299,7 +625,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             </div>
 
             <p className="text-xs text-slate-500 max-w-xl">
-              {currentPlan.description || 'Gennemfør øvelserne nedenfor i dit eget tempo. Marker som udført undervejs.'}
+              {currentPlan.description || 'Gennemfør øvelserne i dit eget tempo. Alt hvad du foretager dig gemmes automatisk, så du kan forlade og genoptage træningen når som helst.'}
             </p>
           </div>
 
@@ -345,10 +671,21 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               )}
             </div>
 
+            {/* Pause & save draft button */}
+            <button
+              type="button"
+              onClick={handlePauseAndSaveDraft}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors border border-slate-200"
+              title="Pause uret og gem kladden, så du kan gå i gang igen senere"
+            >
+              <Pause className="w-3.5 h-3.5 text-slate-500" />
+              <span>Pause & gem kladde</span>
+            </button>
+
             {/* Finish Workout CTA */}
             <button
               id="btn-finish-workout-top"
-              onClick={handleFinishWorkout}
+              onClick={handleFinishWorkoutClick}
               className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 cursor-pointer"
             >
               <Save className="w-4 h-4" />
@@ -401,15 +738,15 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               </p>
             </div>
             <button
-              onClick={handleFinishWorkout}
-              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm shadow-blue-600/30 transition-all inline-flex items-center gap-2"
+              onClick={handleFinishWorkoutClick}
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-md shadow-blue-600/30"
             >
               <Save className="w-4 h-4" />
-              <span>Gennemfør og gem træningspas</span>
+              <span>Gem træningspas og se resultat</span>
             </button>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {pendingExercises.map((exercise) => {
               const fullEx = allExercises.find((e) => e.id === exercise.exerciseId);
               const timerState = timers[exercise.id] || { seconds: 0, isRunning: false };
@@ -417,173 +754,173 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               return (
                 <div
                   key={exercise.id}
-                  id={`exercise-pending-${exercise.id}`}
-                  className="bg-white rounded-2xl border border-slate-200 shadow-xs hover:border-blue-300 transition-all p-5 overflow-hidden flex flex-col md:flex-row gap-5"
+                  id={`exercise-card-${exercise.id}`}
+                  className="bg-white rounded-2xl border border-slate-200 shadow-xs hover:border-blue-300 transition-all overflow-hidden flex flex-col justify-between"
                 >
-                  {/* Left: Exercise Image & Upload Button */}
-                  <div className="w-full md:w-52 h-40 shrink-0 relative rounded-xl overflow-hidden bg-slate-100 border border-slate-100 group">
-                    {exercise.imageUrl ? (
-                      <img
-                        src={exercise.imageUrl}
-                        alt={exercise.name}
-                        className="w-full h-full"
-                        style={getExerciseImageStyle(exercise.imagePosition || fullEx?.imagePosition)}
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-4 text-center">
-                        <Dumbbell className="w-8 h-8 opacity-30 mb-1" />
-                        <span className="text-[11px] font-medium text-slate-400">Intet billede</span>
-                      </div>
-                    )}
+                  <div className="p-5 space-y-4">
+                    {/* Header: Title, Image, Target Area, Buttons */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0">
+                        {/* Exercise thumbnail with custom focal-point style */}
+                        <div
+                          onClick={() => openImageModalForExercise(exercise)}
+                          className="relative group w-14 h-14 rounded-xl border border-slate-200 bg-slate-50 overflow-hidden shrink-0 cursor-pointer"
+                          title="Klik for at ændre eller justere billede"
+                        >
+                          {exercise.imageUrl ? (
+                            <img
+                              src={exercise.imageUrl}
+                              alt={exercise.name}
+                              className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                              style={getExerciseImageStyle(
+                                exercise.imagePosition || fullEx?.imagePosition
+                              )}
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-slate-400">
+                              <Dumbbell className="w-6 h-6" />
+                            </div>
+                          )}
+                          <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                            <Camera className="w-4 h-4 text-white" />
+                          </div>
+                        </div>
 
-                    {/* Quick photo upload button */}
-                    <button
-                      type="button"
-                      onClick={() => openImageModalForExercise(exercise)}
-                      className="absolute bottom-2 right-2 px-2 py-1 rounded-lg bg-white/90 hover:bg-white text-blue-700 shadow-xs text-[11px] font-semibold flex items-center gap-1 transition-all"
-                      title="Tilføj eller skift billede til øvelsen"
-                    >
-                      <Camera className="w-3 h-3" />
-                      <span>{exercise.imageUrl ? 'Skift foto' : 'Tilføj foto'}</span>
-                    </button>
-                  </div>
-
-                  {/* Middle: Details & inputs */}
-                  <div className="flex-1 flex flex-col justify-between space-y-4">
-                    <div>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-base font-bold text-slate-900 tracking-tight">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-700">
+                              {exercise.targetArea || fullEx?.targetArea || 'Knæ'}
+                            </span>
+                            {exercise.separateLegs && (
+                              <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
+                                V / H opdelt
+                              </span>
+                            )}
+                          </div>
+                          <h4 className="text-sm font-bold text-slate-900 mt-1 truncate">
                             {exercise.name}
                           </h4>
-                          {exercise.targetArea && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">
-                              {exercise.targetArea}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Video / Progress link */}
-                        <div className="flex items-center gap-2 text-xs">
-                          {exercise.videoUrl && (
-                            <a
-                              href={exercise.videoUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
-                            >
-                              <span>Video</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (fullEx) setInspectExercise(fullEx);
-                            }}
-                            className="text-slate-500 hover:text-blue-600 font-medium flex items-center gap-1"
-                          >
-                            <TrendingUp className="w-3 h-3 text-blue-600" />
-                            <span>Graf</span>
-                          </button>
                         </div>
                       </div>
 
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
-                        {exercise.description}
-                      </p>
+                      {/* Small actions: Inspect progress, timer toggle */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {fullEx && (
+                          <button
+                            type="button"
+                            onClick={() => setInspectExercise(fullEx)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-slate-50 transition-colors"
+                            title="Se historisk fremgang"
+                          >
+                            <TrendingUp className="w-4 h-4" />
+                          </button>
+                        )}
+                        {exercise.videoUrl && (
+                          <a
+                            href={exercise.videoUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-slate-50 transition-colors"
+                            title="Se videoguide"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        )}
+                      </div>
                     </div>
 
-                    {/* Leg Differentiation Tabs (Samlet vs Hvert ben) */}
-                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="inline-flex bg-white p-0.5 rounded-lg border border-slate-200 text-xs shadow-2xs shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => updateExerciseField(exercise.id, 'separateLegs', false)}
-                            className={`px-2.5 py-1 rounded-md font-semibold text-xs whitespace-nowrap transition-all ${
-                              !exercise.separateLegs
-                                ? 'bg-blue-600 text-white shadow-xs'
-                                : 'text-slate-600 hover:text-slate-900'
-                            }`}
-                            title="Udfør samlet for begge ben"
-                          >
-                            Begge ben
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => updateExerciseField(exercise.id, 'separateLegs', true)}
-                            className={`px-2.5 py-1 rounded-md font-semibold text-xs whitespace-nowrap transition-all ${
-                              exercise.separateLegs
-                                ? 'bg-blue-600 text-white shadow-xs'
-                                : 'text-slate-600 hover:text-slate-900'
-                            }`}
-                            title="Registrer særskilt for venstre og højre ben"
-                          >
-                            V / H ben
-                          </button>
-                        </div>
+                    {/* Exercise description */}
+                    <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">
+                      {exercise.description}
+                    </p>
 
-                        {/* Optional timer for exercise */}
-                        <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-2 py-1 rounded-lg border border-slate-200/80 shadow-2xs shrink-0">
-                          <span className="font-mono font-bold text-slate-800 text-xs">
-                            {formatTimer(timerState.seconds)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => toggleExerciseTimer(exercise.id)}
-                            className="p-1 rounded bg-slate-50 border border-slate-200 text-blue-600 hover:bg-blue-50 transition-colors"
-                            title={timerState.isRunning ? 'Pause timer' : 'Start timer'}
-                          >
-                            {timerState.isRunning ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                          </button>
-                          {timerState.seconds > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => resetExerciseTimer(exercise.id)}
-                              className="p-1 text-slate-400 hover:text-rose-500 transition-colors"
-                              title="Nulstil"
-                            >
-                              <RotateCcw className="w-2.5 h-2.5" />
-                            </button>
-                          )}
-                        </div>
+                    {/* Timer control for this individual exercise */}
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-3.5 h-3.5 text-blue-600" />
+                        <span className="text-slate-600 font-medium">Tid på øvelse:</span>
+                        <span className="font-mono font-bold text-slate-900">
+                          {formatTimer(timerState.seconds)}
+                        </span>
                       </div>
 
-                      {/* Inputs: Samlet vs Separat */}
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleExerciseTimer(exercise.id)}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-colors ${
+                            timerState.isRunning
+                              ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                              : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                          }`}
+                        >
+                          {timerState.isRunning ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                          {timerState.isRunning ? 'Pause' : 'Start'}
+                        </button>
+                        {timerState.seconds > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => resetExerciseTimer(exercise.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
+                            title="Nulstil tid"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Weight & Reps Input Section */}
+                    <div className="space-y-2 pt-1 border-t border-slate-100">
+                      {/* Separate legs checkbox toggle */}
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={!!exercise.separateLegs}
+                            onChange={(e) => updateExerciseField(exercise.id, 'separateLegs', e.target.checked)}
+                            className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                          />
+                          <span>Opdel på venstre / højre ben</span>
+                        </label>
+                      </div>
+
+                      {/* Standard weight and sets/reps input */}
                       {!exercise.separateLegs ? (
-                        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                        <div className="grid grid-cols-3 gap-2">
                           <div>
-                            <label className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 truncate">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
                               Sæt
-                            </label>
+                            </span>
                             <input
                               type="number"
                               min="1"
                               value={exercise.sets}
                               onChange={(e) =>
-                                updateExerciseField(exercise.id, 'sets', parseInt(e.target.value, 10) || 1)
+                                updateExerciseField(exercise.id, 'sets', parseInt(e.target.value) || 1)
                               }
-                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500 transition-colors"
+                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
                             />
                           </div>
+
                           <div>
-                            <label className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 truncate">
-                              Reps
-                            </label>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                              Gentagelser
+                            </span>
                             <input
                               type="text"
                               value={exercise.reps}
                               onChange={(e) => updateExerciseField(exercise.id, 'reps', e.target.value)}
                               placeholder="10-15"
-                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500 transition-colors"
+                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
                             />
                           </div>
+
                           <div>
-                            <label className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 truncate">
-                              Vægt (kg)
-                            </label>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                              Belastning (kg)
+                            </span>
                             <input
                               type="number"
                               step="0.5"
@@ -596,14 +933,14 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                                   e.target.value === '' ? undefined : parseFloat(e.target.value)
                                 )
                               }
-                              placeholder="0 (kropsvægt)"
-                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500 transition-colors"
+                              placeholder="0 (krop)"
+                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
                             />
                           </div>
                         </div>
                       ) : (
-                        <div className="grid grid-cols-2 gap-2 sm:gap-3 pt-0.5">
-                          {/* Left leg */}
+                        /* Unilateral left/right leg separate inputs */
+                        <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                           <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5">
                             <span className="text-xs font-bold text-blue-700 block truncate">
                               Venstre (V)
@@ -646,7 +983,6 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                             </div>
                           </div>
 
-                          {/* Right leg */}
                           <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5">
                             <span className="text-xs font-bold text-blue-700 block truncate">
                               Højre (H)
@@ -692,7 +1028,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                       )}
                     </div>
 
-                    {/* Bottom Action */}
+                    {/* Bottom Action: Note and Mark Complete */}
                     <div className="flex items-center justify-between gap-2 pt-1">
                       <input
                         type="text"
@@ -793,6 +1129,133 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         </div>
       )}
 
+      {/* BOTTOM FINISH BAR */}
+      <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div>
+          <div className="font-bold text-sm text-slate-900">
+            {completedCount === totalCount
+              ? 'Alle øvelser er udført!'
+              : `${completedCount} af ${totalCount} øvelser udført i dette pas`}
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {completedCount === totalCount
+              ? 'Tryk på knappen for at gemme og afslutte passet i databasen.'
+              : 'Du kan gemme nu som delvist gennemført, eller sætte på pause og fortsætte senere.'}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handlePauseAndSaveDraft}
+            className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors border border-slate-200"
+          >
+            Pause & gem kladde
+          </button>
+
+          <button
+            type="button"
+            onClick={handleFinishWorkoutClick}
+            className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-md shadow-blue-600/25 flex items-center gap-2"
+          >
+            <Save className="w-4 h-4" />
+            <span>Gem træningspas</span>
+          </button>
+        </div>
+      </div>
+
+      {/* PARTIAL COMPLETION MODAL */}
+      {showPartialModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 max-w-md w-full p-6 shadow-2xl space-y-4 text-left relative animate-in fade-in zoom-in-95 duration-200">
+            <button
+              onClick={() => setShowPartialModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Uafsluttet træningspas
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Du har udført {completedCount} af {totalCount} øvelser i dag.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Hvad vil du gøre med dette træningspas? Vælg den løsning, der passer dig bedst:
+            </p>
+
+            <div className="space-y-2.5 pt-1">
+              {/* Choice 1: Save as Partial */}
+              <button
+                type="button"
+                onClick={() => completeAndSaveSession(true)}
+                className="w-full text-left p-3.5 rounded-xl bg-amber-50/70 hover:bg-amber-100/80 border border-amber-200 transition-colors group"
+              >
+                <div className="font-bold text-xs text-amber-900 flex items-center justify-between">
+                  <span>Gem som delvist gennemført pas</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-amber-700 transition-transform group-hover:translate-x-0.5" />
+                </div>
+                <p className="text-[11px] text-amber-800/80 mt-1">
+                  Gemmer de {completedCount} øvelser i historikken med mærket "Delvis". Du kan altid åbne tabellen og klikke <strong>"Genoptag"</strong> for at gøre resten færdig!
+                </p>
+              </button>
+
+              {/* Choice 2: Save as complete anyway */}
+              <button
+                type="button"
+                onClick={() => completeAndSaveSession(false)}
+                className="w-full text-left p-3.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-colors group"
+              >
+                <div className="font-bold text-xs text-slate-800 flex items-center justify-between">
+                  <span>Gem som fuldført pas alligevel</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-500 transition-transform group-hover:translate-x-0.5" />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Hvis du er færdig for i dag og ikke ønsker at lave de resterende øvelser.
+                </p>
+              </button>
+
+              {/* Choice 3: Keep active draft */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPartialModal(false);
+                  handlePauseAndSaveDraft();
+                }}
+                className="w-full text-left p-3.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-colors group"
+              >
+                <div className="font-bold text-xs text-slate-800 flex items-center justify-between">
+                  <span>Pause & behold i Dagens Pas</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-500 transition-transform group-hover:translate-x-0.5" />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Lukker appen midlertidigt uden at gemme i historikken. Du kan fortsætte direkte her i dag eller i morgen.
+                </p>
+              </button>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowPartialModal(false)}
+                className="w-full py-2 text-center text-xs font-semibold text-slate-500 hover:text-slate-800"
+              >
+                Fortryd og bliv i træningen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modals */}
       {inspectExercise && (
         <ExerciseProgressModal
@@ -810,7 +1273,6 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             if (onUpdateExercise) {
               onUpdateExercise(updated);
             }
-            // Also update local state
             setSessionExercises((prev) =>
               prev.map((item) =>
                 item.exerciseId === updated.id
