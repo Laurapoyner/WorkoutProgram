@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import { X, Calendar, Dumbbell, ExternalLink, Activity, Clock } from 'lucide-react';
 import { Exercise, ExerciseLogEntry } from '../types';
+import { getExerciseImageStyle } from '../utils/imageStyle';
 
 interface ExerciseProgressModalProps {
   exercise: Exercise | null;
@@ -104,7 +105,8 @@ export const ExerciseProgressModal: React.FC<ExerciseProgressModalProps> = ({
                 <img
                   src={exercise.imageUrl}
                   alt={exercise.name}
-                  className="w-full h-32 object-cover"
+                  className="w-full h-32"
+                  style={getExerciseImageStyle(exercise.imagePosition)}
                   referrerPolicy="no-referrer"
                 />
               </div>

@@ -1,8 +1,9 @@
 import React, { useState, useRef, useMemo } from 'react';
-import { X, Upload, Dumbbell, Image as ImageIcon, Video, Layers, Check, Plus } from 'lucide-react';
-import { Exercise } from '../types';
+import { X, Upload, Dumbbell, Image as ImageIcon, Video, Layers, Check, Plus, Trash2 } from 'lucide-react';
+import { Exercise, ImagePosition } from '../types';
 import { createExerciseSvg } from '../db/defaultData';
 import { StorageService } from '../db/storage';
+import { ImageFocalAdjuster } from './ImageFocalAdjuster';
 
 interface AddExerciseModalProps {
   onClose: () => void;
@@ -53,6 +54,7 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
   const [videoUrl, setVideoUrl] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imagePosition, setImagePosition] = useState<ImagePosition>({ x: 50, y: 50, scale: 1 });
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -114,6 +116,7 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
       isUnilateralByDefault,
       videoUrl: videoUrl.trim() || undefined,
       imageUrl: imageUrl || createExerciseSvg(name.trim(), 'custom'),
+      imagePosition: imageUrl ? imagePosition : undefined,
       createdAt: new Date().toISOString(),
     };
 
@@ -158,45 +161,82 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-5 flex-1">
           {/* Image upload area */}
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-              Øvelsesbillede / Foto
-            </label>
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDragging(true);
-              }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
-                isDragging
-                  ? 'border-blue-500 bg-blue-50/50'
-                  : 'border-slate-300 hover:border-blue-400 bg-slate-50/60 hover:bg-blue-50/20'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-
-              {imagePreview ? (
-                <div className="relative group max-w-xs mx-auto">
-                  <img
-                    src={imagePreview}
-                    alt="Preview"
-                    className="h-36 mx-auto object-cover rounded-xl border border-slate-200 shadow-xs"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="mt-2 text-xs text-blue-600 font-semibold flex items-center justify-center gap-1">
-                    <ImageIcon className="w-3.5 h-3.5" />
-                    {isUploading ? 'Gemmer billede...' : 'Klik for at skifte billede'}
-                  </div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Øvelsesbillede / Foto
+                </label>
+                {imagePreview && (
+                  <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                    Træk for at tilpasse frame
+                  </span>
+                )}
+              </div>
+              {imagePreview && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    Skift foto
+                  </button>
+                  <span className="text-slate-300">•</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImagePreview(null);
+                      setImageUrl('');
+                      setImagePosition({ x: 50, y: 50, scale: 1 });
+                    }}
+                    className="text-xs text-rose-500 hover:text-rose-600 flex items-center gap-1 font-medium"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Fjern
+                  </button>
                 </div>
-              ) : (
+              )}
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+
+            {imagePreview ? (
+              <div className="relative">
+                <ImageFocalAdjuster
+                  imageUrl={imagePreview}
+                  position={imagePosition}
+                  onChangePosition={setImagePosition}
+                />
+                {isUploading && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-xs flex items-center justify-center rounded-2xl z-10">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-blue-600">
+                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                      Uploader billede...
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
+                  isDragging
+                    ? 'border-blue-500 bg-blue-50/50'
+                    : 'border-slate-300 hover:border-blue-400 bg-slate-50/60 hover:bg-blue-50/20'
+                }`}
+              >
                 <div className="space-y-2 py-2">
                   <div className="w-10 h-10 mx-auto rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
                     <Upload className="w-5 h-5" />
@@ -208,8 +248,8 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
                     Understøtter JPG, PNG, WebP (fx fotos fra mobil eller screenshots)
                   </p>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           {/* Title */}

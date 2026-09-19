@@ -22,6 +22,8 @@ import {
   Check,
   User,
   ShieldCheck,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { StorageService } from './db/storage';
 import { Exercise, WorkoutPlan, ExerciseLogEntry, CompletedSession } from './types';
@@ -47,6 +49,21 @@ export default function App() {
   const [logs, setLogs] = useState<ExerciseLogEntry[]>(INITIAL_LOGS);
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
   const [activePlanId, setActivePlanId] = useState<string>('plan-kneerehab');
+  const [dbStatus, setDbStatus] = useState<{
+    type: string;
+    connected: boolean;
+    databaseName: string;
+    hasMongoUri: boolean;
+    error?: string | null;
+  }>({
+    type: 'local_json',
+    connected: true,
+    databaseName: 'Lokal fil',
+    hasMongoUri: false,
+    error: null,
+  });
+  const [isReconnectingDb, setIsReconnectingDb] = useState(false);
+  const [showDbInfoModal, setShowDbInfoModal] = useState(false);
 
   // Success toast message
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -56,6 +73,16 @@ export default function App() {
     async function loadData() {
       try {
         await StorageService.init();
+
+        // Fetch DB Status
+        try {
+          const statusRes = await fetch('/api/db-status');
+          if (statusRes.ok) {
+            const st = await statusRes.json();
+            setDbStatus(st);
+          }
+        } catch {}
+
         const [loadedExercises, loadedPlans, loadedLogs, loadedSessions] = await Promise.all([
           StorageService.getExercises(),
           StorageService.getPlans(),
@@ -79,6 +106,47 @@ export default function App() {
 
     loadData();
   }, []);
+
+  const handleRetryDb = async () => {
+    setIsReconnectingDb(true);
+    try {
+      const res = await fetch('/api/db-retry', { method: 'POST' });
+      const data = await res.json();
+      if (data.connected) {
+        setDbStatus({
+          type: 'mongodb',
+          connected: true,
+          databaseName: data.databaseName || 'fysiodanmark',
+          hasMongoUri: true,
+          error: null,
+        });
+        showToast('MongoDB Atlas tilsluttet succesfuldt!');
+        // Refresh data
+        await StorageService.init();
+        const [loadedExercises, loadedPlans, loadedLogs, loadedSessions] = await Promise.all([
+          StorageService.getExercises(),
+          StorageService.getPlans(),
+          StorageService.getLogs(),
+          StorageService.getCompletedSessions(),
+        ]);
+        if (loadedExercises?.length) setExercises(loadedExercises);
+        if (loadedPlans?.length) setPlans(loadedPlans);
+        if (loadedLogs?.length) setLogs(loadedLogs);
+        if (loadedSessions) setSessions(loadedSessions);
+      } else {
+        setDbStatus((prev) => ({
+          ...prev,
+          connected: false,
+          error: data.error,
+        }));
+        showToast('Kunne ikke forbinde til MongoDB Atlas endnu. Tjek Network Access.');
+      }
+    } catch {
+      showToast('Netværksfejl under genopretning');
+    } finally {
+      setIsReconnectingDb(false);
+    }
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -229,16 +297,66 @@ export default function App() {
           </div>
 
           {/* Database indicator tag */}
-          <div className="mt-5 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-              </span>
-              <span className="font-semibold text-[11px]">Database aktiv</span>
+          {dbStatus.connected && dbStatus.type === 'mongodb' ? (
+            <div className="mt-5 px-3 py-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/60 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-emerald-300">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                <div>
+                  <div className="font-bold text-[11px] text-emerald-200">MongoDB Atlas</div>
+                  <div className="text-[10px] text-emerald-400 font-mono">fysiodanmark (Online)</div>
+                </div>
+              </div>
+              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
             </div>
-            <span className="text-[10px] font-mono text-slate-400">Cloud API</span>
-          </div>
+          ) : dbStatus.hasMongoUri ? (
+            <div className="mt-5 p-3 rounded-xl bg-amber-950/50 border border-amber-600/40 text-left">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+                  </span>
+                  <span className="font-bold text-[11px] text-amber-200">MongoDB Forbindelse</span>
+                </div>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-300 font-semibold uppercase tracking-wider">
+                  Afventer
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-200/80 mt-1.5 leading-relaxed">
+                Atlas IP-filter blokerer adgangen. Giv adgang i MongoDB Atlas.
+              </p>
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  onClick={handleRetryDb}
+                  disabled={isReconnectingDb}
+                  className="flex-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all shadow-sm disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isReconnectingDb ? 'animate-spin' : ''}`} />
+                  {isReconnectingDb ? 'Forbinder...' : 'Genopret forbindelse'}
+                </button>
+                <button
+                  onClick={() => setShowDbInfoModal(true)}
+                  className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium"
+                >
+                  Hjælp
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-5 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+                </span>
+                <span className="font-semibold text-[11px]">Lokal Database</span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400">Aktiv</span>
+            </div>
+          )}
 
           {/* Navigation Links */}
           <nav className="mt-6 space-y-1.5">
@@ -451,6 +569,67 @@ export default function App() {
             setIsAddExerciseModalOpen(false);
           }}
         />
+      )}
+
+      {/* MongoDB Setup Info Modal */}
+      {showDbInfoModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl relative text-left">
+            <button
+              onClick={() => setShowDbInfoModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Tillad adgang i MongoDB Atlas</h3>
+                <p className="text-xs text-slate-400">Sådan åbner du for forbindelsen (1 min)</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <p>
+                MongoDB Atlas blokerer som standard alle nye servere og apps, medmindre du tilføjer en IP-regel.
+              </p>
+
+              <ol className="space-y-2 list-decimal list-inside bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-slate-300">
+                <li>Log ind på <strong className="text-white">MongoDB Atlas</strong>.</li>
+                <li>I venstre menu under <em>Security</em>, klik på <strong className="text-emerald-400">Network Access</strong>.</li>
+                <li>Klik på den grønne knap <strong className="text-white">"Add IP Address"</strong>.</li>
+                <li>Vælg <strong className="text-amber-300">"ALLOW ACCESS FROM ANYWHERE"</strong> (sætter IP til <code className="bg-slate-800 px-1 py-0.5 rounded text-amber-300">0.0.0.0/0</code>).</li>
+                <li>Klik <strong className="text-white">"Confirm"</strong>.</li>
+              </ol>
+
+              <p className="text-slate-400 text-[11px]">
+                Når det er gjort, tager det ca. 15-30 sekunder for Atlas at opdatere. Tryk derefter på <strong>"Genopret forbindelse"</strong> knappen.
+              </p>
+            </div>
+
+            <div className="mt-5 flex gap-2.5">
+              <button
+                onClick={() => {
+                  setShowDbInfoModal(false);
+                  handleRetryDb();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Prøv at forbinde nu
+              </button>
+              <button
+                onClick={() => setShowDbInfoModal(false)}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+              >
+                Luk
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

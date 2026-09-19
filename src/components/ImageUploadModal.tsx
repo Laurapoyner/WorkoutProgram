@@ -10,7 +10,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import { StorageService } from '../db/storage';
-import { Exercise } from '../types';
+import { Exercise, ImagePosition } from '../types';
+import { ImageFocalAdjuster } from './ImageFocalAdjuster';
 
 interface ImageUploadModalProps {
   exercise: Exercise;
@@ -53,6 +54,9 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'upload' | 'url' | 'presets'>('upload');
   const [currentImage, setCurrentImage] = useState(exercise.imageUrl || '');
+  const [imagePosition, setImagePosition] = useState<ImagePosition>(
+    exercise.imagePosition || { x: 50, y: 50, scale: 1 }
+  );
   const [urlInput, setUrlInput] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -106,6 +110,7 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
     const updated: Exercise = {
       ...exercise,
       imageUrl: currentImage,
+      imagePosition: currentImage ? imagePosition : undefined,
     };
     onSaveImage(updated);
     onClose();
@@ -145,47 +150,67 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
           </button>
         </div>
 
-        {/* Current Image Preview */}
+        {/* Current Image Preview & Interactive Frame Adjustment */}
         <div className="px-6 pt-5">
           <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Forhåndsvisning
-            </label>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Forhåndsvisning & Udsnit
+              </label>
+              {currentImage && (
+                <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                  Træk for at tilpasse
+                </span>
+              )}
+            </div>
             {currentImage && (
               <button
                 type="button"
-                onClick={() => setCurrentImage('')}
-                className="text-xs text-rose-500 hover:text-rose-600 flex items-center gap-1 font-medium"
+                onClick={() => {
+                  setCurrentImage('');
+                  setImagePosition({ x: 50, y: 50, scale: 1 });
+                }}
+                className="text-xs text-rose-500 hover:text-rose-600 flex items-center gap-1 font-medium transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Fjern billede
               </button>
             )}
           </div>
-          <div className="w-full h-44 bg-slate-50 border border-slate-200 rounded-xl overflow-hidden flex items-center justify-center relative">
-            {currentImage ? (
-              <img
-                src={currentImage}
-                alt="Øvelsesbillede"
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
+
+          {currentImage ? (
+            <div className="relative">
+              <ImageFocalAdjuster
+                imageUrl={currentImage}
+                position={imagePosition}
+                onChangePosition={setImagePosition}
               />
-            ) : (
+              {isUploading && (
+                <div className="absolute inset-0 bg-white/85 backdrop-blur-xs flex items-center justify-center rounded-2xl z-10">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-blue-600">
+                    <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                    Uploader billede...
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="w-full h-40 bg-slate-50 border border-slate-200 rounded-xl overflow-hidden flex items-center justify-center relative">
               <div className="text-center p-4 text-slate-400">
                 <ImageIcon className="w-10 h-10 mx-auto mb-2 opacity-40 text-slate-400" />
                 <p className="text-xs font-medium text-slate-500">Intet billede valgt endnu</p>
                 <p className="text-[11px] text-slate-400">Vælg en fil, indsæt link eller vælg fra galleriet nedenfor</p>
               </div>
-            )}
-            {isUploading && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-xs flex items-center justify-center">
-                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600">
-                  <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-                  Uploader billede...
+              {isUploading && (
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-xs flex items-center justify-center">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-blue-600">
+                    <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                    Uploader billede...
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Tab Controls */}

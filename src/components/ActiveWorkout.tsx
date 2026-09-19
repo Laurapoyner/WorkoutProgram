@@ -21,6 +21,7 @@ import {
 import { WorkoutPlan, PlanExercise, ExerciseLogEntry, CompletedSession, Exercise } from '../types';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
 import { ImageUploadModal } from './ImageUploadModal';
+import { getExerciseImageStyle } from '../utils/imageStyle';
 
 interface ActiveWorkoutProps {
   plans: WorkoutPlan[];
@@ -237,6 +238,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       name: planEx.name,
       description: planEx.description,
       imageUrl: planEx.imageUrl,
+      imagePosition: planEx.imagePosition,
       defaultSets: planEx.sets,
       defaultReps: planEx.reps,
       createdAt: new Date().toISOString(),
@@ -424,7 +426,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                       <img
                         src={exercise.imageUrl}
                         alt={exercise.name}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full"
+                        style={getExerciseImageStyle(exercise.imagePosition || fullEx?.imagePosition)}
                         referrerPolicy="no-referrer"
                       />
                     ) : (
@@ -494,42 +497,44 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
                     {/* Leg Differentiation Tabs (Samlet vs Hvert ben) */}
                     <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex bg-white p-0.5 rounded-lg border border-slate-200 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="inline-flex bg-white p-0.5 rounded-lg border border-slate-200 text-xs shadow-2xs shrink-0">
                           <button
                             type="button"
                             onClick={() => updateExerciseField(exercise.id, 'separateLegs', false)}
-                            className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                            className={`px-2.5 py-1 rounded-md font-semibold text-xs whitespace-nowrap transition-all ${
                               !exercise.separateLegs
                                 ? 'bg-blue-600 text-white shadow-xs'
                                 : 'text-slate-600 hover:text-slate-900'
                             }`}
+                            title="Udfør samlet for begge ben"
                           >
-                            Samlet for begge ben
+                            Begge ben
                           </button>
                           <button
                             type="button"
                             onClick={() => updateExerciseField(exercise.id, 'separateLegs', true)}
-                            className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                            className={`px-2.5 py-1 rounded-md font-semibold text-xs whitespace-nowrap transition-all ${
                               exercise.separateLegs
                                 ? 'bg-blue-600 text-white shadow-xs'
                                 : 'text-slate-600 hover:text-slate-900'
                             }`}
+                            title="Registrer særskilt for venstre og højre ben"
                           >
-                            Separat for V & H ben
+                            V / H ben
                           </button>
                         </div>
 
                         {/* Optional timer for exercise */}
-                        <div className="flex items-center gap-1.5 text-xs text-slate-600">
-                          <span className="font-mono font-bold text-slate-800">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-2 py-1 rounded-lg border border-slate-200/80 shadow-2xs shrink-0">
+                          <span className="font-mono font-bold text-slate-800 text-xs">
                             {formatTimer(timerState.seconds)}
                           </span>
                           <button
                             type="button"
                             onClick={() => toggleExerciseTimer(exercise.id)}
-                            className="p-1 rounded bg-white border border-slate-200 text-blue-600 hover:bg-blue-50"
-                            title={timerState.isRunning ? 'Pause' : 'Start timer'}
+                            className="p-1 rounded bg-slate-50 border border-slate-200 text-blue-600 hover:bg-blue-50 transition-colors"
+                            title={timerState.isRunning ? 'Pause timer' : 'Start timer'}
                           >
                             {timerState.isRunning ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
                           </button>
@@ -537,7 +542,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                             <button
                               type="button"
                               onClick={() => resetExerciseTimer(exercise.id)}
-                              className="p-1 text-slate-400 hover:text-rose-500"
+                              className="p-1 text-slate-400 hover:text-rose-500 transition-colors"
                               title="Nulstil"
                             >
                               <RotateCcw className="w-2.5 h-2.5" />
@@ -548,9 +553,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
                       {/* Inputs: Samlet vs Separat */}
                       {!exercise.separateLegs ? (
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="grid grid-cols-3 gap-2 sm:gap-3">
                           <div>
-                            <label className="block text-[10px] font-semibold text-slate-500 uppercase">
+                            <label className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 truncate">
                               Sæt
                             </label>
                             <input
@@ -560,23 +565,23 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                               onChange={(e) =>
                                 updateExerciseField(exercise.id, 'sets', parseInt(e.target.value, 10) || 1)
                               }
-                              className="w-full mt-0.5 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500"
+                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500 transition-colors"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-semibold text-slate-500 uppercase">
-                              Gentagelser (Reps)
+                            <label className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 truncate">
+                              Reps
                             </label>
                             <input
                               type="text"
                               value={exercise.reps}
                               onChange={(e) => updateExerciseField(exercise.id, 'reps', e.target.value)}
                               placeholder="10-15"
-                              className="w-full mt-0.5 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500"
+                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500 transition-colors"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-semibold text-slate-500 uppercase">
+                            <label className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 truncate">
                               Vægt (kg)
                             </label>
                             <input
@@ -592,20 +597,22 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                                 )
                               }
                               placeholder="0 (kropsvægt)"
-                              className="w-full mt-0.5 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500"
+                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500 transition-colors"
                             />
                           </div>
                         </div>
                       ) : (
-                        <div className="grid grid-cols-2 gap-3 pt-1">
+                        <div className="grid grid-cols-2 gap-2 sm:gap-3 pt-0.5">
                           {/* Left leg */}
-                          <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1.5">
-                            <span className="text-xs font-bold text-blue-700 block">
-                              🦵 Venstre ben (V)
+                          <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5">
+                            <span className="text-xs font-bold text-blue-700 block truncate">
+                              Venstre (V)
                             </span>
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-2 gap-1.5">
                               <div>
-                                <span className="text-[10px] text-slate-500">Vægt (kg)</span>
+                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
+                                  Kg
+                                </span>
                                 <input
                                   type="number"
                                   step="0.5"
@@ -618,12 +625,14 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                                       e.target.value === '' ? undefined : parseFloat(e.target.value)
                                     )
                                   }
-                                  placeholder="0 kg"
+                                  placeholder="0"
                                   className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
                                 />
                               </div>
                               <div>
-                                <span className="text-[10px] text-slate-500">Reps</span>
+                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
+                                  Reps
+                                </span>
                                 <input
                                   type="text"
                                   value={exercise.leftLegReps || exercise.reps}
@@ -638,13 +647,15 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                           </div>
 
                           {/* Right leg */}
-                          <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1.5">
-                            <span className="text-xs font-bold text-blue-700 block">
-                              🦵 Højre ben (H)
+                          <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5">
+                            <span className="text-xs font-bold text-blue-700 block truncate">
+                              Højre (H)
                             </span>
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-2 gap-1.5">
                               <div>
-                                <span className="text-[10px] text-slate-500">Vægt (kg)</span>
+                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
+                                  Kg
+                                </span>
                                 <input
                                   type="number"
                                   step="0.5"
@@ -657,12 +668,14 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                                       e.target.value === '' ? undefined : parseFloat(e.target.value)
                                     )
                                   }
-                                  placeholder="0 kg"
+                                  placeholder="0"
                                   className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
                                 />
                               </div>
                               <div>
-                                <span className="text-[10px] text-slate-500">Reps</span>
+                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
+                                  Reps
+                                </span>
                                 <input
                                   type="text"
                                   value={exercise.rightLegReps || exercise.reps}
@@ -680,22 +693,22 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                     </div>
 
                     {/* Bottom Action */}
-                    <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center justify-between gap-2 pt-1">
                       <input
                         type="text"
                         value={exercise.notes || ''}
                         onChange={(e) => updateExerciseField(exercise.id, 'notes', e.target.value)}
-                        placeholder="Tilføj personlig note (fx let ømhed, godt træk)..."
-                        className="text-xs text-slate-600 placeholder-slate-400 bg-transparent border-b border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none flex-1 max-w-sm mr-3"
+                        placeholder="Note (valgfri)..."
+                        className="text-xs text-slate-700 placeholder-slate-400 bg-slate-50 hover:bg-slate-100/80 focus:bg-white px-2.5 py-1.5 rounded-lg border border-transparent focus:border-blue-400 focus:outline-none flex-1 min-w-0 transition-all"
                       />
 
                       <button
                         type="button"
                         onClick={() => handleToggleComplete(exercise.id)}
-                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 flex items-center gap-1.5 cursor-pointer"
+                        className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-xs shadow-blue-600/30 flex items-center gap-1.5 shrink-0 cursor-pointer"
                       >
                         <Check className="w-3.5 h-3.5 stroke-[3]" />
-                        <span>Markér som udført</span>
+                        <span>Udført</span>
                       </button>
                     </div>
                   </div>
@@ -739,7 +752,11 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                     <img
                       src={exercise.imageUrl}
                       alt={exercise.name}
-                      className="w-12 h-12 rounded-xl object-cover border border-slate-100 hidden sm:block"
+                      className="w-12 h-12 rounded-xl border border-slate-100 hidden sm:block"
+                      style={getExerciseImageStyle(
+                        exercise.imagePosition ||
+                          allExercises.find((e) => e.id === exercise.exerciseId)?.imagePosition
+                      )}
                       referrerPolicy="no-referrer"
                     />
                   )}
@@ -796,7 +813,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             // Also update local state
             setSessionExercises((prev) =>
               prev.map((item) =>
-                item.exerciseId === updated.id ? { ...item, imageUrl: updated.imageUrl } : item
+                item.exerciseId === updated.id
+                  ? { ...item, imageUrl: updated.imageUrl, imagePosition: updated.imagePosition }
+                  : item
               )
             );
             setExerciseForImageUpload(null);

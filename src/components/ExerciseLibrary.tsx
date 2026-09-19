@@ -14,6 +14,7 @@ import { Exercise, ExerciseLogEntry } from '../types';
 import { AddExerciseModal } from './AddExerciseModal';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
 import { ImageUploadModal } from './ImageUploadModal';
+import { getExerciseImageStyle } from '../utils/imageStyle';
 
 interface ExerciseLibraryProps {
   exercises: Exercise[];
@@ -151,7 +152,8 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                   <img
                     src={exercise.imageUrl}
                     alt={exercise.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    className="w-full h-full transition-transform duration-300 group-hover:scale-105"
+                    style={getExerciseImageStyle(exercise.imagePosition)}
                     referrerPolicy="no-referrer"
                   />
                 ) : (

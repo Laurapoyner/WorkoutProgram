@@ -1,8 +1,15 @@
+export interface ImagePosition {
+  x: number; // 0 - 100 percentage (horizontal focal point, default 50)
+  y: number; // 0 - 100 percentage (vertical focal point, default 50)
+  scale?: number; // 1 - 2.5 zoom level (default 1)
+}
+
 export interface Exercise {
   id: string;
   name: string;
   description: string;
   imageUrl?: string;
+  imagePosition?: ImagePosition;
   videoUrl?: string;
   targetArea?: string; // fx 'Knæ', 'Lår', 'Hofte', 'Core'
   defaultSets: number;
@@ -18,6 +25,7 @@ export interface PlanExercise {
   name: string;
   description: string;
   imageUrl?: string;
+  imagePosition?: ImagePosition;
   videoUrl?: string;
   targetArea?: string;
   sets: number;

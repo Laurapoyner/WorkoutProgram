@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { WorkoutPlan, Exercise, PlanExercise } from '../types';
+import { getExerciseImageStyle } from '../utils/imageStyle';
 
 interface PlanManagerProps {
   plans: WorkoutPlan[];
@@ -122,6 +123,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
           name: ex.name,
           description: ex.description,
           imageUrl: ex.imageUrl,
+          imagePosition: ex.imagePosition,
           videoUrl: ex.videoUrl,
           targetArea: ex.targetArea,
           sets: ex.defaultSets || 3,
@@ -177,6 +179,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
         name: exercise.name,
         description: exercise.description,
         imageUrl: exercise.imageUrl,
+        imagePosition: exercise.imagePosition,
         videoUrl: exercise.videoUrl,
         targetArea: exercise.targetArea,
         sets: exercise.defaultSets || 3,
@@ -977,7 +980,8 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
                             <img
                               src={ex.imageUrl}
                               alt={ex.name}
-                              className="w-11 h-11 rounded-lg object-cover border border-slate-200 hidden sm:block shrink-0"
+                              className="w-11 h-11 rounded-lg border border-slate-200 hidden sm:block shrink-0"
+                              style={getExerciseImageStyle(ex.imagePosition)}
                               referrerPolicy="no-referrer"
                             />
                           )}
