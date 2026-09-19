@@ -1,0 +1,430 @@
+import React, { useState, useRef, useMemo } from 'react';
+import { X, Upload, Dumbbell, Image as ImageIcon, Video, Layers, Check, Plus } from 'lucide-react';
+import { Exercise } from '../types';
+import { createExerciseSvg } from '../db/defaultData';
+import { StorageService } from '../db/storage';
+
+interface AddExerciseModalProps {
+  onClose: () => void;
+  onSave: (exercise: Exercise) => void;
+  exercises?: Exercise[];
+  existingCategories?: string[];
+}
+
+const DEFAULT_CATEGORIES = [
+  'Knæ & Lår',
+  'Hofte & Bækken',
+  'Læg & Ankel',
+  'Core & Ryg',
+  'Overkrop & Skulder',
+  'Balance & Stabilitet',
+  'Kondition & Opvarmning',
+];
+
+export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
+  onClose,
+  onSave,
+  exercises = [],
+  existingCategories = [],
+}) => {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+
+  // Extract unique categories from defaults, exercises and existingCategories
+  const allCategories = useMemo(() => {
+    const set = new Set<string>(DEFAULT_CATEGORIES);
+    existingCategories.forEach((cat) => {
+      if (cat && cat.trim()) set.add(cat.trim());
+    });
+    exercises.forEach((ex) => {
+      if (ex.targetArea && ex.targetArea.trim()) set.add(ex.targetArea.trim());
+    });
+    return Array.from(set);
+  }, [exercises, existingCategories]);
+
+  const [selectedCategory, setSelectedCategory] = useState<string>('Knæ & Lår');
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
+  const [customCategoryText, setCustomCategoryText] = useState('');
+
+  const [defaultSets, setDefaultSets] = useState(3);
+  const [defaultReps, setDefaultReps] = useState('10-15');
+  const [defaultWeightKg, setDefaultWeightKg] = useState<number | ''>('');
+  const [isUnilateralByDefault, setIsUnilateralByDefault] = useState(false);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Vælg venligst en gyldig billedfil (PNG, JPG, WebP el.lign.)');
+      return;
+    }
+    setIsUploading(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const result = e.target?.result as string;
+      setImagePreview(result);
+      try {
+        const savedUrl = await StorageService.uploadImage(result, file.name);
+        setImageUrl(savedUrl);
+      } catch {
+        setImageUrl(result);
+      } finally {
+        setIsUploading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleFileUpload(file);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      handleFileUpload(file);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+
+    const finalTargetArea =
+      (isCustomCategory ? customCategoryText.trim() : selectedCategory.trim()) || 'Knæ & Lår';
+
+    const newExercise: Exercise = {
+      id: `ex-custom-${Date.now()}`,
+      name: name.trim(),
+      description: description.trim(),
+      targetArea: finalTargetArea,
+      defaultSets: Number(defaultSets) || 3,
+      defaultReps: defaultReps.trim() || '10-15',
+      defaultWeightKg: defaultWeightKg === '' ? undefined : Number(defaultWeightKg),
+      isUnilateralByDefault,
+      videoUrl: videoUrl.trim() || undefined,
+      imageUrl: imageUrl || createExerciseSvg(name.trim(), 'custom'),
+      createdAt: new Date().toISOString(),
+    };
+
+    onSave(newExercise);
+    onClose();
+  };
+
+  return (
+    <div
+      id="add-exercise-modal-backdrop"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        id="add-exercise-modal-card"
+        className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-xl overflow-hidden text-slate-900 my-8 flex flex-col max-h-[90vh]"
+      >
+        {/* Top Royal Blue Accent Strip */}
+        <div className="h-1 bg-blue-600 w-full" />
+
+        {/* Modal Header */}
+        <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-white">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center">
+              <Dumbbell className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Tilføj ny øvelse</h2>
+              <p className="text-xs text-slate-500">Upload billede, beskrivelse og standardopsætning</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-5 flex-1">
+          {/* Image upload area */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+              Øvelsesbillede / Foto
+            </label>
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
+                isDragging
+                  ? 'border-blue-500 bg-blue-50/50'
+                  : 'border-slate-300 hover:border-blue-400 bg-slate-50/60 hover:bg-blue-50/20'
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+
+              {imagePreview ? (
+                <div className="relative group max-w-xs mx-auto">
+                  <img
+                    src={imagePreview}
+                    alt="Preview"
+                    className="h-36 mx-auto object-cover rounded-xl border border-slate-200 shadow-xs"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="mt-2 text-xs text-blue-600 font-semibold flex items-center justify-center gap-1">
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    {isUploading ? 'Gemmer billede...' : 'Klik for at skifte billede'}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2 py-2">
+                  <div className="w-10 h-10 mx-auto rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                    <Upload className="w-5 h-5" />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    Træk og slip billede her, eller klik for at uploade
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Understøtter JPG, PNG, WebP (fx fotos fra mobil eller screenshots)
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Title */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+              Øvelsens navn *
+            </label>
+            <input
+              type="text"
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="fx 13. Squat til boks"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm"
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+              Instruktion & Vejledning *
+            </label>
+            <textarea
+              required
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Beskriv udgangsposition, bevægelse, tempo og teknik..."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm resize-none"
+            />
+          </div>
+
+          {/* Target area & video url */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-blue-600" />
+                  Fokusområde / Muskelgruppe
+                </span>
+                <span className="text-[10px] text-blue-600 font-semibold normal-case">
+                  Vælg fra liste
+                </span>
+              </label>
+
+              {/* Category Dropdown with existing categories */}
+              <select
+                id="exercise-target-area-select"
+                value={isCustomCategory ? '__custom__' : selectedCategory}
+                onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setIsCustomCategory(true);
+                  } else {
+                    setIsCustomCategory(false);
+                    setSelectedCategory(e.target.value);
+                  }
+                }}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 font-medium"
+              >
+                <optgroup label="Eksisterende kategorier">
+                  {allCategories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </optgroup>
+                <option value="__custom__">➕ Opret ny kategori (skriv selv)...</option>
+              </select>
+
+              {/* Custom category input if selected */}
+              {isCustomCategory && (
+                <div className="mt-2 animate-in fade-in duration-200">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={customCategoryText}
+                    onChange={(e) => setCustomCategoryText(e.target.value)}
+                    placeholder="Indtast navnet på den nye kategori..."
+                    className="w-full px-3 py-2 rounded-xl bg-blue-50/50 border border-blue-400 text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-100 placeholder-slate-400"
+                  />
+                  <div className="flex items-center justify-between mt-1 px-1">
+                    <span className="text-[10px] text-slate-500">
+                      Denne nye kategori bliver også tilgængelig i fremtidige programmer.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsCustomCategory(false)}
+                      className="text-[10px] text-blue-600 hover:underline font-medium"
+                    >
+                      Brug liste igen
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Quick suggestion chips */}
+              <div className="mt-2 flex flex-wrap gap-1">
+                {allCategories.slice(0, 5).map((cat) => (
+                  <button
+                    type="button"
+                    key={cat}
+                    onClick={() => {
+                      setIsCustomCategory(false);
+                      setSelectedCategory(cat);
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors ${
+                      !isCustomCategory && selectedCategory === cat
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                <Video className="w-3.5 h-3.5 text-blue-600" />
+                Videolink (valgfri)
+              </label>
+              <input
+                type="url"
+                value={videoUrl}
+                onChange={(e) => setVideoUrl(e.target.value)}
+                placeholder="https://exorlive.com/... el. YouTube"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+          </div>
+
+          {/* Default sets, reps, weight */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                Sæt
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                value={defaultSets}
+                onChange={(e) => setDefaultSets(parseInt(e.target.value, 10) || 1)}
+                className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                Gentagelser
+              </label>
+              <input
+                type="text"
+                value={defaultReps}
+                onChange={(e) => setDefaultReps(e.target.value)}
+                placeholder="10-15"
+                className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                Vægt (kg)
+              </label>
+              <input
+                type="number"
+                step="0.5"
+                min="0"
+                value={defaultWeightKg}
+                onChange={(e) => setDefaultWeightKg(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                placeholder="0 = krop"
+                className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+          </div>
+
+          {/* Unilateral toggle */}
+          <div>
+            <label className="flex items-center gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer hover:bg-blue-50/30 transition-colors">
+              <input
+                type="checkbox"
+                checked={isUnilateralByDefault}
+                onChange={(e) => setIsUnilateralByDefault(e.target.checked)}
+                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 focus:ring-offset-white accent-blue-600 cursor-pointer"
+              />
+              <div className="text-xs">
+                <span className="font-semibold text-slate-800 block">
+                  Etbens-øvelse (udføres normalt på ét ben ad gangen)
+                </span>
+                <span className="text-slate-500">
+                  Aktiverer automatisk individuel registrering for venstre og højre ben
+                </span>
+              </div>
+            </label>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+            >
+              Annuller
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 flex items-center gap-1.5"
+            >
+              <Check className="w-4 h-4" />
+              Gem øvelse i biblioteket
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};

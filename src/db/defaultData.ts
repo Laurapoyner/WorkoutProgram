@@ -1,0 +1,401 @@
+import { Exercise, WorkoutPlan, ExerciseLogEntry } from '../types';
+
+// Helper to create clean visual SVG icons/illustrations for exercise thumbnails
+export const createExerciseSvg = (label: string, iconType: string): string => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" width="320" height="200">
+    <defs>
+      <linearGradient id="g_${iconType}" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#1e293b"/>
+        <stop offset="100%" stop-color="#0f172a"/>
+      </linearGradient>
+      <linearGradient id="accent_${iconType}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#0ea5e9"/>
+        <stop offset="100%" stop-color="#10b981"/>
+      </linearGradient>
+    </defs>
+    <rect width="320" height="200" fill="url(#g_${iconType})" rx="12"/>
+    <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.15">
+      <path d="M0 160 Q 80 140, 160 160 T 320 160" stroke="#38bdf8"/>
+      <path d="M0 175 Q 80 155, 160 175 T 320 175" stroke="#34d399"/>
+    </g>
+    <!-- Figure outline -->
+    <g transform="translate(110, 30)" stroke="#e2e8f0" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="50" cy="18" r="12" fill="#38bdf8" stroke="#38bdf8" opacity="0.9"/>
+      <path d="M50 30 L50 72 L30 110" />
+      <path d="M50 72 L72 110" />
+      <path d="M30 110 L25 125" />
+      <path d="M72 110 L82 125" />
+      <path d="M30 46 L70 46" />
+      <path d="M70 46 L82 65" />
+      <circle cx="50" cy="85" r="4" fill="#10b981" />
+    </g>
+    <!-- Accent indicator -->
+    <rect x="20" y="152" width="280" height="30" rx="6" fill="#1e293b" opacity="0.8"/>
+    <text x="30" y="172" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600">
+      ${label.length > 34 ? label.substring(0, 32) + '...' : label}
+    </text>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
+
+export const INITIAL_EXERCISES: Exercise[] = [
+  {
+    id: 'ex-1',
+    name: '1. Hælløft på stepbænk med håndklæde',
+    description: 'Stå med din forfod på en stepbænk med et håndklæde under tæerne. Din hæl er ude over kanten af stepbænken. Støt dig selv mod en væg eller lignende efter behov. Skub dig selv opad ved at løfte hælene så højt som du kan. Sænk dig langsomt igen.',
+    targetArea: 'Læg & Knæ',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: false,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=12623',
+    imageUrl: createExerciseSvg('Hælløft på stepbænk', 'haelloft'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-2',
+    name: '2. Leg extension',
+    description: 'Sørg for at have god støtte i lænderyggen. Sid med bøjede knæ (ca. 120 grader) og stræk benene maksimalt. Marker gerne toppunktet og sænk roligt tilbage.',
+    targetArea: 'Quadriceps (Forlår)',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 20,
+    isUnilateralByDefault: false,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=128',
+    imageUrl: createExerciseSvg('Leg extension', 'legextension'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-3',
+    name: '3. Etbens benpres',
+    description: 'Placer venstre/højre ben på fodbrættet i skulderbreddes afstand. Hav en ca. 90 graders vinkel i knæene. Stram op i mave- og lændregionen og pres opad til benet næsten er strakt. Vend tilbage til startpositionen og gentag.',
+    targetArea: 'Forlår & Balder',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 35,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=8430',
+    imageUrl: createExerciseSvg('Etbens benpres', 'etbensbenpres'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-4',
+    name: '4. Liggende etbens sædeløft på stor bold',
+    description: 'Læg dig med det ene ben på en bold og armene langs siden. Stram sæde- og lårmuskulaturen, og løft bækkenet og lænden op fra underlaget. Sænk roligt tilbage og gentag.',
+    targetArea: 'Baglår & Balder',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=472',
+    imageUrl: createExerciseSvg('Etbens sædeløft på stor bold', 'saedeloft'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-5',
+    name: '5. Planken med benløft',
+    description: 'Stå på tæer og albuer og find neutralstillingen af ryggen og bækken. Brug dyb mave- og rygmuskulatur for at holde dig stabil rundt om bækkenet og lænden imens du løfter fod op fra underlaget. Hold et par sekunder før du sænker ned igen og gentag på modsatte side.',
+    targetArea: 'Core & Hofte',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=13726',
+    imageUrl: createExerciseSvg('Planken med benløft', 'planke'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-6',
+    name: '6. Sideplanke m/arm- og benløft',
+    description: 'Løft dig op i sideliggende planke med støtte på underarmen og strakte ben. Løft så øverste arm og ben strakt op imod loftet. Sænk roligt ned igen. Gentag.',
+    targetArea: 'Side core & Hofteabduktor',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=13264',
+    imageUrl: createExerciseSvg('Sideplanke m/arm- og benløft', 'sideplanke'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-7',
+    name: '7. Modificeret Copenhagen adduktion - på bænk',
+    description: 'Lig på siden med underarmen i gulvet og den øverste fod placeret ovenpå en bænk el. Den nederste fod ligger på gulvet. Løft dig op til plankeposition og før samtidig det nederste ben op imod benet på bænken. Sænk roligt hoften og resten af benet ned igen.',
+    targetArea: 'Lysk & Inderlår',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=12742',
+    imageUrl: createExerciseSvg('Copenhagen adduktion', 'copenhagen'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-8',
+    name: '8. Slides: Stående hofteabduktion m/ gulvtæppe 2',
+    description: 'Placér det aktive ben på et stykke gulvtæppe. Før benet ud til siden. Sørg for at benet er i lige forlængelse af kroppen således at al bevægelse forekommer i hoften. Foden skal pege fremad gennem hele bevægelsen. Vend kontrolleret tilbage til udgangsstillingen.',
+    targetArea: 'Hofte & Balde',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=11026',
+    imageUrl: createExerciseSvg('Stående hofteabduktion', 'hofteabduktion'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-9',
+    name: '9. Vekslende Leg Curl m/slides',
+    description: 'Lig på ryggen, hælene på sliderne og armene ned langs kroppen. Løft hoften og træk skiftevist hælene ind mod balderne.',
+    targetArea: 'Baglår (Hamstrings)',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=11843',
+    imageUrl: createExerciseSvg('Vekslende Leg Curl m/slides', 'legcurlslides'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-10',
+    name: '10. Slides: Enkelte bentrækninger intervaller',
+    description: 'Placer albuer og fodbalder på måtterne, træk maven ind. Træk hvert andet ben ind med knæene langs gulvet til 90 grader i hofteleddet. Glid tilbage til udgangspunktet samtidigt med du trækker op i modsatte ben. Raskt og kontrolleret tempo i de valgte antal sekunder.',
+    targetArea: 'Core & Hoftebøjere',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 0,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=8591',
+    imageUrl: createExerciseSvg('Enkelte bentrækninger', 'bentraekninger'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-11',
+    name: '11. Siddende Leg Curl',
+    description: 'Sørg for god rygstøtte. Grib håndtagene for støtte og stabilitet. Pres anklerne mod ankelstøtten og bøj knæene maksimalt. Vend langsomt tilbage til udgangspunktet.',
+    targetArea: 'Baglår (Hamstrings)',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 25,
+    isUnilateralByDefault: false,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=12067',
+    imageUrl: createExerciseSvg('Siddende Leg Curl', 'siddendelegcurl'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+  {
+    id: 'ex-12',
+    name: '12. Lunge m/kettlebells',
+    description: 'Start i grundstilling med to kugler i farmer position. Tag et skridt fremover og hold overkroppen lodret. Sænk hofterne vertikalt mod gulvet indtil det bagerste næsten rører gulvet. Den forreste fod skal have knæet over foden og bag tæerne. Skub med det forreste ben tilbage til udgangsposition (grundstilling).',
+    targetArea: 'Knæstabilitet, Lår & Balder',
+    defaultSets: 3,
+    defaultReps: '10-15',
+    defaultWeightKg: 8,
+    isUnilateralByDefault: true,
+    videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=8207',
+    imageUrl: createExerciseSvg('Lunge m/kettlebells', 'lungekettlebells'),
+    createdAt: '2026-09-16T15:59:00.000Z',
+  },
+];
+
+export const INITIAL_PLANS: WorkoutPlan[] = [
+  {
+    id: 'plan-kneerehab',
+    title: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    description: 'Genoptræningsprogram for knæ udfærdiget af Rolf Krogshede Madsen. Udføres max 2 gange om ugen.',
+    frequency: 'Max 2 gange om ugen',
+    scheduledDates: ['2026-09-16', '2026-09-19', '2026-09-22'],
+    createdAt: '2026-09-16T15:59:00.000Z',
+    updatedAt: '2026-09-19T09:00:00.000Z',
+    exercises: INITIAL_EXERCISES.map((ex, index) => ({
+      id: `pe-${ex.id}`,
+      exerciseId: ex.id,
+      name: ex.name,
+      description: ex.description,
+      imageUrl: ex.imageUrl,
+      videoUrl: ex.videoUrl,
+      targetArea: ex.targetArea,
+      sets: ex.defaultSets,
+      reps: ex.defaultReps,
+      weightKg: ex.defaultWeightKg,
+      separateLegs: ex.id === 'ex-3', // Default: Etbens benpres starts with individual leg demonstration
+      leftLegWeightKg: ex.id === 'ex-3' ? 30 : ex.defaultWeightKg,
+      leftLegReps: ex.defaultReps,
+      rightLegWeightKg: ex.id === 'ex-3' ? 35 : ex.defaultWeightKg,
+      rightLegReps: ex.defaultReps,
+      notes: index === 2 ? 'Lettere vægt på venstre ben efter genoptræningsvejledning' : undefined,
+      isCompleted: false,
+    })),
+  },
+  {
+    id: 'plan-mobility',
+    title: 'Hofte & Knæ Mobilitet (Let pas)',
+    description: 'Fokus på kontrol, glid og adduktion på hviledage.',
+    frequency: '1 gang ugentligt',
+    scheduledDates: ['2026-09-20'],
+    createdAt: '2026-09-17T10:00:00.000Z',
+    updatedAt: '2026-09-17T10:00:00.000Z',
+    exercises: [
+      {
+        id: 'pe-mob-1',
+        exerciseId: 'ex-1',
+        name: INITIAL_EXERCISES[0].name,
+        description: INITIAL_EXERCISES[0].description,
+        imageUrl: INITIAL_EXERCISES[0].imageUrl,
+        videoUrl: INITIAL_EXERCISES[0].videoUrl,
+        targetArea: INITIAL_EXERCISES[0].targetArea,
+        sets: 2,
+        reps: '15',
+        weightKg: 0,
+        separateLegs: false,
+      },
+      {
+        id: 'pe-mob-7',
+        exerciseId: 'ex-7',
+        name: INITIAL_EXERCISES[6].name,
+        description: INITIAL_EXERCISES[6].description,
+        imageUrl: INITIAL_EXERCISES[6].imageUrl,
+        videoUrl: INITIAL_EXERCISES[6].videoUrl,
+        targetArea: INITIAL_EXERCISES[6].targetArea,
+        sets: 2,
+        reps: '10',
+        weightKg: 0,
+        separateLegs: true,
+        leftLegWeightKg: 0,
+        leftLegReps: '10',
+        rightLegWeightKg: 0,
+        rightLegReps: '10',
+      },
+      {
+        id: 'pe-mob-8',
+        exerciseId: 'ex-8',
+        name: INITIAL_EXERCISES[7].name,
+        description: INITIAL_EXERCISES[7].description,
+        imageUrl: INITIAL_EXERCISES[7].imageUrl,
+        videoUrl: INITIAL_EXERCISES[7].videoUrl,
+        targetArea: INITIAL_EXERCISES[7].targetArea,
+        sets: 2,
+        reps: '12',
+        weightKg: 0,
+        separateLegs: true,
+        leftLegWeightKg: 0,
+        leftLegReps: '12',
+        rightLegWeightKg: 0,
+        rightLegReps: '12',
+      },
+    ],
+  },
+];
+
+// Sample historical logs to illustrate progress over time on knee rehab
+export const INITIAL_LOGS: ExerciseLogEntry[] = [
+  {
+    id: 'log-1',
+    exerciseId: 'ex-3', // Etbens benpres
+    exerciseName: '3. Etbens benpres',
+    planId: 'plan-kneerehab',
+    planTitle: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    date: '2026-09-02',
+    timestamp: new Date('2026-09-02T10:30:00.000Z').getTime(),
+    separateLegs: true,
+    sets: 3,
+    reps: '10',
+    leftLegWeightKg: 20,
+    leftLegReps: '10',
+    rightLegWeightKg: 30,
+    rightLegReps: '10',
+    durationSeconds: 145,
+    notes: 'Forsigtig med venstre knæ. God stabilitet.',
+  },
+  {
+    id: 'log-2',
+    exerciseId: 'ex-3',
+    exerciseName: '3. Etbens benpres',
+    planId: 'plan-kneerehab',
+    planTitle: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    date: '2026-09-07',
+    timestamp: new Date('2026-09-07T14:15:00.000Z').getTime(),
+    separateLegs: true,
+    sets: 3,
+    reps: '12',
+    leftLegWeightKg: 25,
+    leftLegReps: '12',
+    rightLegWeightKg: 32.5,
+    rightLegReps: '12',
+    durationSeconds: 155,
+    notes: 'Venstre ben føles stærkere.',
+  },
+  {
+    id: 'log-3',
+    exerciseId: 'ex-3',
+    exerciseName: '3. Etbens benpres',
+    planId: 'plan-kneerehab',
+    planTitle: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    date: '2026-09-12',
+    timestamp: new Date('2026-09-12T11:00:00.000Z').getTime(),
+    separateLegs: true,
+    sets: 3,
+    reps: '12',
+    leftLegWeightKg: 27.5,
+    leftLegReps: '12',
+    rightLegWeightKg: 35,
+    rightLegReps: '12',
+    durationSeconds: 140,
+    notes: 'God dybde, ingen smerter.',
+  },
+  {
+    id: 'log-4',
+    exerciseId: 'ex-2', // Leg extension
+    exerciseName: '2. Leg extension',
+    planId: 'plan-kneerehab',
+    planTitle: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    date: '2026-09-07',
+    timestamp: new Date('2026-09-07T14:35:00.000Z').getTime(),
+    separateLegs: false,
+    sets: 3,
+    reps: '12',
+    weightKg: 15,
+    durationSeconds: 120,
+  },
+  {
+    id: 'log-5',
+    exerciseId: 'ex-2',
+    exerciseName: '2. Leg extension',
+    planId: 'plan-kneerehab',
+    planTitle: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    date: '2026-09-12',
+    timestamp: new Date('2026-09-12T11:20:00.000Z').getTime(),
+    separateLegs: false,
+    sets: 3,
+    reps: '12',
+    weightKg: 20,
+    durationSeconds: 130,
+  },
+  {
+    id: 'log-6',
+    exerciseId: 'ex-12', // Lunge m/kettlebells
+    exerciseName: '12. Lunge m/kettlebells',
+    planId: 'plan-kneerehab',
+    planTitle: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    date: '2026-09-07',
+    timestamp: new Date('2026-09-07T14:50:00.000Z').getTime(),
+    separateLegs: false,
+    sets: 3,
+    reps: '10',
+    weightKg: 6,
+    durationSeconds: 180,
+  },
+  {
+    id: 'log-7',
+    exerciseId: 'ex-12',
+    exerciseName: '12. Lunge m/kettlebells',
+    planId: 'plan-kneerehab',
+    planTitle: 'Genoptræning for knæ (FysioDanmark Ringkøbing)',
+    date: '2026-09-12',
+    timestamp: new Date('2026-09-12T11:45:00.000Z').getTime(),
+    separateLegs: false,
+    sets: 3,
+    reps: '12',
+    weightKg: 8,
+    durationSeconds: 195,
+  },
+];

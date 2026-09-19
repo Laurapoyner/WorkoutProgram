@@ -1,0 +1,6 @@
+{
+  "name": "Træningssystem & Genoptræning",
+  "description": "Træningssystem med øvelsesbibliotek, personlige træningsprogrammer, individuel ben-registrering og historisk fremgangsgraf.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
