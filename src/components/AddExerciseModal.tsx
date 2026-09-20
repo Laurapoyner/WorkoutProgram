@@ -1,7 +1,6 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { X, Upload, Dumbbell, Image as ImageIcon, Video, Layers, Check, Plus, Trash2, Loader2, Database } from 'lucide-react';
-import { Exercise, ImagePosition } from '../types';
-import { createExerciseSvg } from '../db/defaultData';
+import { Exercise, ImagePosition, ExerciseTrackingMode } from '../types';
 import { StorageService } from '../db/storage';
 import { ImageFocalAdjuster } from './ImageFocalAdjuster';
 import { compressImageFile } from '../utils/imageCompressor';
@@ -11,6 +10,7 @@ interface AddExerciseModalProps {
   onSave: (exercise: Exercise) => Promise<void> | void;
   exercises?: Exercise[];
   existingCategories?: string[];
+  exerciseToEdit?: Exercise | null;
 }
 
 const DEFAULT_CATEGORIES = [
@@ -28,9 +28,10 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
   onSave,
   exercises = [],
   existingCategories = [],
+  exerciseToEdit = null,
 }) => {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
+  const [name, setName] = useState(exerciseToEdit?.name || '');
+  const [description, setDescription] = useState(exerciseToEdit?.description || '');
 
   // Extract unique categories from defaults, exercises and existingCategories
   const allCategories = useMemo(() => {
@@ -44,18 +45,26 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
     return Array.from(set);
   }, [exercises, existingCategories]);
 
-  const [selectedCategory, setSelectedCategory] = useState<string>('Knæ & Lår');
+  const [selectedCategory, setSelectedCategory] = useState<string>(exerciseToEdit?.targetArea || 'Knæ & Lår');
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [customCategoryText, setCustomCategoryText] = useState('');
 
-  const [defaultSets, setDefaultSets] = useState(3);
-  const [defaultReps, setDefaultReps] = useState('10-15');
-  const [defaultWeightKg, setDefaultWeightKg] = useState<number | ''>('');
-  const [isUnilateralByDefault, setIsUnilateralByDefault] = useState(false);
-  const [videoUrl, setVideoUrl] = useState('');
-  const [imageUrl, setImageUrl] = useState('');
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imagePosition, setImagePosition] = useState<ImagePosition>({ x: 50, y: 50, scale: 1 });
+  const [defaultSets, setDefaultSets] = useState(exerciseToEdit?.defaultSets || 3);
+  const [defaultReps, setDefaultReps] = useState(exerciseToEdit?.defaultReps || '10-15');
+  const [defaultWeightKg, setDefaultWeightKg] = useState<number | ''>(exerciseToEdit?.defaultWeightKg ?? '');
+  const [isUnilateralByDefault, setIsUnilateralByDefault] = useState(!!exerciseToEdit?.isUnilateralByDefault);
+  const [videoUrl, setVideoUrl] = useState(exerciseToEdit?.videoUrl || '');
+  const [imageUrl, setImageUrl] = useState(exerciseToEdit?.imageUrl || '');
+  const [imagePreview, setImagePreview] = useState<string | null>(exerciseToEdit?.imageUrl || null);
+  const [imagePosition, setImagePosition] = useState<ImagePosition>(exerciseToEdit?.imagePosition || { x: 50, y: 50, scale: 1 });
+  const [trackingMode, setTrackingMode] = useState<ExerciseTrackingMode>(exerciseToEdit?.trackingMode || 'sets_reps_weight');
+  const [defaultDurationSeconds, setDefaultDurationSeconds] = useState(exerciseToEdit?.defaultDurationSeconds || 30);
+  const [defaultRounds, setDefaultRounds] = useState(exerciseToEdit?.defaultRounds || 1);
+  const [restSeconds, setRestSeconds] = useState(exerciseToEdit?.restSeconds || 0);
+  const [scoreLabel, setScoreLabel] = useState(exerciseToEdit?.scoreLabel || 'Score');
+  const [scoreUnit, setScoreUnit] = useState(exerciseToEdit?.scoreUnit || 'reps');
+  const [lowerScoreIsBetter, setLowerScoreIsBetter] = useState(!!exerciseToEdit?.lowerScoreIsBetter);
+  const [scorePerSide, setScorePerSide] = useState(exerciseToEdit?.scorePerSide ?? !!exerciseToEdit?.isUnilateralByDefault);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -80,14 +89,10 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
       setImageUrl(savedUrl);
     } catch (err: any) {
       console.error('Billedupload fejl:', err);
-      // Fallback
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const result = e.target?.result as string;
-        setImagePreview(result);
-        setImageUrl(result);
-      };
-      reader.readAsDataURL(file);
+      // Do not silently keep a device-local base64 image: that would not be shared across devices.
+      setImageUrl('');
+      setImagePreview('');
+      setSaveError(err?.message || 'Billedet kunne ikke gemmes i den fælles database.');
     } finally {
       setIsUploading(false);
     }
@@ -117,18 +122,27 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
       (isCustomCategory ? customCategoryText.trim() : selectedCategory.trim()) || 'Knæ & Lår';
 
     const newExercise: Exercise = {
-      id: `ex-custom-${Date.now()}`,
+      id: exerciseToEdit?.id || `ex-custom-${Date.now()}`,
       name: name.trim(),
       description: description.trim(),
       targetArea: finalTargetArea,
-      defaultSets: Number(defaultSets) || 3,
+      defaultSets: Number(defaultSets) || 1,
       defaultReps: defaultReps.trim() || '10-15',
-      defaultWeightKg: defaultWeightKg === '' ? undefined : Number(defaultWeightKg),
+      defaultWeightKg: trackingMode === 'sets_reps_weight' && defaultWeightKg !== '' ? Number(defaultWeightKg) : undefined,
       isUnilateralByDefault,
+      trackingMode,
+      defaultDurationSeconds: trackingMode === 'timed_score' ? Number(defaultDurationSeconds) || 0 : undefined,
+      defaultRounds: trackingMode === 'timed_score' ? Number(defaultRounds) || 1 : undefined,
+      restSeconds: trackingMode === 'timed_score' ? Number(restSeconds) || 0 : undefined,
+      scoreLabel: trackingMode === 'timed_score' ? scoreLabel.trim() || 'Score' : undefined,
+      scoreUnit: trackingMode === 'timed_score' ? scoreUnit.trim() || 'reps' : undefined,
+      lowerScoreIsBetter: trackingMode === 'timed_score' ? lowerScoreIsBetter : undefined,
+      scorePerSide: trackingMode === 'timed_score' ? scorePerSide : undefined,
       videoUrl: videoUrl.trim() || undefined,
-      imageUrl: imageUrl || createExerciseSvg(name.trim(), 'custom'),
+      imageUrl: imageUrl || undefined,
       imagePosition: imageUrl ? imagePosition : undefined,
-      createdAt: new Date().toISOString(),
+      createdAt: exerciseToEdit?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     setIsSaving(true);
@@ -166,8 +180,8 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
               <Dumbbell className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900">Tilføj ny øvelse</h2>
-              <p className="text-xs text-slate-500">Upload billede, beskrivelse og standardopsætning</p>
+              <h2 className="text-base font-bold text-slate-900">{exerciseToEdit ? 'Rediger øvelse' : 'Tilføj ny øvelse'}</h2>
+              <p className="text-xs text-slate-500">{exerciseToEdit ? 'Ret navn, billede, registrering og standardværdier' : 'Upload billede, beskrivelse og standardopsætning'}</p>
             </div>
           </div>
           <button
@@ -402,7 +416,50 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
             </div>
           </div>
 
+          {/* Registreringstype */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Registreringstype</label>
+              <select
+                value={trackingMode}
+                onChange={(e) => setTrackingMode(e.target.value as ExerciseTrackingMode)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="sets_reps_weight">Sæt, gentagelser og kg (standard)</option>
+                <option value="timed_score">Tid / forsøg med score pr. runde</option>
+              </select>
+            </div>
+
+            {trackingMode === 'timed_score' && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase">Sekunder</label>
+                  <input type="number" min="0" value={defaultDurationSeconds} onChange={(e) => setDefaultDurationSeconds(Number(e.target.value) || 0)} className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase">Antal runder/forsøg</label>
+                  <input type="number" min="1" value={defaultRounds} onChange={(e) => setDefaultRounds(Number(e.target.value) || 1)} className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase">Pause (sek)</label>
+                  <input type="number" min="0" value={restSeconds} onChange={(e) => setRestSeconds(Number(e.target.value) || 0)} className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase">Enhed</label>
+                  <input type="text" value={scoreUnit} onChange={(e) => setScoreUnit(e.target.value)} placeholder="reps, cm, fejl..." className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase">Score-navn</label>
+                  <input type="text" value={scoreLabel} onChange={(e) => setScoreLabel(e.target.value)} placeholder="Fx succesfulde hop" className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm" />
+                </div>
+                <label className="col-span-1 flex items-center gap-2 text-xs text-slate-700"><input type="checkbox" checked={scorePerSide} onChange={(e) => setScorePerSide(e.target.checked)} className="accent-blue-600" /> Score pr. ben</label>
+                <label className="col-span-1 flex items-center gap-2 text-xs text-slate-700"><input type="checkbox" checked={lowerScoreIsBetter} onChange={(e) => setLowerScoreIsBetter(e.target.checked)} className="accent-blue-600" /> Lavere er bedre</label>
+              </div>
+            )}
+          </div>
+
           {/* Default sets, reps, weight */}
+          {trackingMode === 'sets_reps_weight' && (
           <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
@@ -446,6 +503,7 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
               />
             </div>
           </div>
+          )}
 
           {/* Unilateral toggle */}
           <div>
@@ -501,7 +559,7 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
                 ) : (
                   <>
                     <Check className="w-4 h-4" />
-                    <span>Gem øvelse i biblioteket</span>
+                    <span>{exerciseToEdit ? 'Gem ændringer' : 'Gem øvelse i biblioteket'}</span>
                   </>
                 )}
               </button>

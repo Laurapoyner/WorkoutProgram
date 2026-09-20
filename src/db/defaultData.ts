@@ -49,7 +49,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: false,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=12623',
-    imageUrl: createExerciseSvg('Hælløft på stepbænk', 'haelloft'),
+    imageUrl: '/imported/exorlive/ex-1.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -62,7 +62,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 20,
     isUnilateralByDefault: false,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=128',
-    imageUrl: createExerciseSvg('Leg extension', 'legextension'),
+    imageUrl: '/imported/exorlive/ex-2.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -75,7 +75,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 35,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=8430',
-    imageUrl: createExerciseSvg('Etbens benpres', 'etbensbenpres'),
+    imageUrl: '/imported/exorlive/ex-3.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -88,7 +88,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=472',
-    imageUrl: createExerciseSvg('Etbens sædeløft på stor bold', 'saedeloft'),
+    imageUrl: '/imported/exorlive/ex-4.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -101,7 +101,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=13726',
-    imageUrl: createExerciseSvg('Planken med benløft', 'planke'),
+    imageUrl: '/imported/exorlive/ex-5.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -114,7 +114,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=13264',
-    imageUrl: createExerciseSvg('Sideplanke m/arm- og benløft', 'sideplanke'),
+    imageUrl: '/imported/exorlive/ex-6.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -127,7 +127,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=12742',
-    imageUrl: createExerciseSvg('Copenhagen adduktion', 'copenhagen'),
+    imageUrl: '/imported/exorlive/ex-7.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -140,7 +140,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=11026',
-    imageUrl: createExerciseSvg('Stående hofteabduktion', 'hofteabduktion'),
+    imageUrl: '/imported/exorlive/ex-8.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -153,7 +153,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=11843',
-    imageUrl: createExerciseSvg('Vekslende Leg Curl m/slides', 'legcurlslides'),
+    imageUrl: '/imported/exorlive/ex-9.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -166,7 +166,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 0,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=8591',
-    imageUrl: createExerciseSvg('Enkelte bentrækninger', 'bentraekninger'),
+    imageUrl: '/imported/exorlive/ex-10.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -179,7 +179,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 25,
     isUnilateralByDefault: false,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=12067',
-    imageUrl: createExerciseSvg('Siddende Leg Curl', 'siddendelegcurl'),
+    imageUrl: '/imported/exorlive/ex-11.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
   {
@@ -192,7 +192,7 @@ export const INITIAL_EXERCISES: Exercise[] = [
     defaultWeightKg: 8,
     isUnilateralByDefault: true,
     videoUrl: 'https://exorlive.com/video/?culture=da-DK&hidesmb=true&ex=8207',
-    imageUrl: createExerciseSvg('Lunge m/kettlebells', 'lungekettlebells'),
+    imageUrl: '/imported/exorlive/ex-12.webp',
     createdAt: '2026-09-16T15:59:00.000Z',
   },
 ];

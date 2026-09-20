@@ -33,21 +33,36 @@ export const ExerciseProgressModal: React.FC<ExerciseProgressModalProps> = ({
       .sort((a, b) => a.timestamp - b.timestamp);
   }, [logs, exercise.id]);
 
+  const isScoreMode = exercise.trackingMode === 'timed_score' || exerciseLogs.some((l) => l.trackingMode === 'timed_score');
+
   // Transform logs for Recharts
   const chartData = useMemo(() => {
     return exerciseLogs.map((log) => {
       const repNum = parseInt(log.reps?.replace(/[^0-9]/g, '') || '0', 10);
+      const leftScores = (log.scoreResults || []).map((r) => r.leftScore).filter((v): v is number => typeof v === 'number');
+      const rightScores = (log.scoreResults || []).map((r) => r.rightScore).filter((v): v is number => typeof v === 'number');
+      const pick = (values: number[]) => log.lowerScoreIsBetter ? Math.min(...values) : Math.max(...values);
+      const leftScore = leftScores.length ? pick(leftScores) : null;
+      const rightScore = rightScores.length ? pick(rightScores) : null;
+      let symmetry = log.lsiPercent ?? null;
+      if (symmetry == null && leftScore != null && rightScore != null) {
+        if (leftScore === 0 && rightScore === 0) symmetry = 100;
+        else {
+          const max = Math.max(Math.abs(leftScore), Math.abs(rightScore));
+          symmetry = max ? Math.round((Math.min(Math.abs(leftScore), Math.abs(rightScore)) / max) * 1000) / 10 : null;
+        }
+      }
       return {
         date: log.date,
-        formattedDate: new Date(log.date).toLocaleDateString('da-DK', {
-          day: 'numeric',
-          month: 'short',
-        }),
+        formattedDate: new Date(log.date).toLocaleDateString('da-DK', { day: 'numeric', month: 'short' }),
         weight: log.weightKg !== undefined ? log.weightKg : null,
         leftLegWeight: log.leftLegWeightKg !== undefined ? log.leftLegWeightKg : null,
         rightLegWeight: log.rightLegWeightKg !== undefined ? log.rightLegWeightKg : null,
         reps: repNum > 0 ? repNum : null,
         durationMin: log.durationSeconds ? Math.round((log.durationSeconds / 60) * 10) / 10 : null,
+        lsi: symmetry,
+        leftScore,
+        rightScore,
       };
     });
   }, [exerciseLogs]);
@@ -119,7 +134,7 @@ export const ExerciseProgressModal: React.FC<ExerciseProgressModalProps> = ({
                 <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-medium">
                   <Dumbbell className="w-3.5 h-3.5 text-blue-600" />
                   <span>
-                    Standard: {exercise.defaultSets} sæt × {exercise.defaultReps} gentagelser
+                    {isScoreMode ? `Standard: ${exercise.defaultRounds || exercise.defaultSets || 1} runder/forsøg${exercise.defaultDurationSeconds ? ` × ${exercise.defaultDurationSeconds} sek.` : ''}` : `Standard: ${exercise.defaultSets} sæt × ${exercise.defaultReps} gentagelser`}
                   </span>
                 </div>
 
@@ -146,7 +161,7 @@ export const ExerciseProgressModal: React.FC<ExerciseProgressModalProps> = ({
                   <Activity className="w-4 h-4" />
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Fremgang & Vægtbelastning over tid
+                  {isScoreMode ? 'Fremgang i LSI / symmetri over tid' : 'Fremgang & Vægtbelastning over tid'}
                 </h3>
               </div>
               <span className="text-xs text-slate-500">
@@ -172,7 +187,7 @@ export const ExerciseProgressModal: React.FC<ExerciseProgressModalProps> = ({
                       tickLine={false}
                       axisLine={{ stroke: '#e2e8f0' }}
                       label={{
-                        value: 'Belastning (kg)',
+                        value: isScoreMode ? 'LSI / symmetri (%)' : 'Belastning (kg)',
                         angle: -90,
                         position: 'insideLeft',
                         offset: 25,
@@ -192,48 +207,21 @@ export const ExerciseProgressModal: React.FC<ExerciseProgressModalProps> = ({
                     />
                     <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
 
-                    {hasSeparateLegData ? (
-                      <>
-                        <Line
-                          type="monotone"
-                          dataKey="leftLegWeight"
-                          name="Venstre ben (kg)"
-                          stroke="#2563eb"
-                          strokeWidth={2.5}
-                          dot={{ r: 4, fill: '#2563eb' }}
-                          activeDot={{ r: 6 }}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="rightLegWeight"
-                          name="Højre ben (kg)"
-                          stroke="#0284c7"
-                          strokeWidth={2.5}
-                          dot={{ r: 4, fill: '#0284c7' }}
-                          activeDot={{ r: 6 }}
-                        />
-                      </>
+                    {isScoreMode ? (
+                      <Line type="monotone" dataKey="lsi" name="LSI / symmetri (%)" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, fill: '#2563eb' }} activeDot={{ r: 6 }} />
                     ) : (
-                      <Line
-                        type="monotone"
-                        dataKey="weight"
-                        name="Samlet vægt (kg)"
-                        stroke="#2563eb"
-                        strokeWidth={2.5}
-                        dot={{ r: 4, fill: '#2563eb' }}
-                        activeDot={{ r: 6 }}
-                      />
+                      <>
+                        {hasSeparateLegData ? (
+                          <>
+                            <Line type="monotone" dataKey="leftLegWeight" name="Venstre ben (kg)" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, fill: '#2563eb' }} activeDot={{ r: 6 }} />
+                            <Line type="monotone" dataKey="rightLegWeight" name="Højre ben (kg)" stroke="#0284c7" strokeWidth={2.5} dot={{ r: 4, fill: '#0284c7' }} activeDot={{ r: 6 }} />
+                          </>
+                        ) : (
+                          <Line type="monotone" dataKey="weight" name="Samlet vægt (kg)" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, fill: '#2563eb' }} activeDot={{ r: 6 }} />
+                        )}
+                        <Line type="monotone" dataKey="reps" name="Gentagelser" stroke="#10b981" strokeWidth={1.5} strokeDasharray="4 4" dot={{ r: 3, fill: '#10b981' }} />
+                      </>
                     )}
-
-                    <Line
-                      type="monotone"
-                      dataKey="reps"
-                      name="Gentagelser"
-                      stroke="#10b981"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 4"
-                      dot={{ r: 3, fill: '#10b981' }}
-                    />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -261,36 +249,30 @@ export const ExerciseProgressModal: React.FC<ExerciseProgressModalProps> = ({
                   <thead>
                     <tr className="border-b border-slate-100 text-slate-500 font-semibold">
                       <th className="pb-2.5">Dato</th>
-                      <th className="pb-2.5">Sæt × Reps</th>
-                      <th className="pb-2.5">Belastning</th>
+                      {isScoreMode ? (<>
+                        <th className="pb-2.5">Resultater</th>
+                        <th className="pb-2.5">LSI / symmetri</th>
+                      </>) : (<>
+                        <th className="pb-2.5">Sæt × Reps</th>
+                        <th className="pb-2.5">Belastning</th>
+                      </>)}
                       <th className="pb-2.5">Noter</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {exerciseLogs.map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-2.5 font-medium text-slate-800">
-                          {new Date(log.date).toLocaleDateString('da-DK', {
-                            day: 'numeric',
-                            month: 'short',
-                            year: 'numeric',
-                          })}
-                        </td>
-                        <td className="py-2.5 text-slate-600">
-                          {log.sets} sæt × {log.reps} reps
-                        </td>
-                        <td className="py-2.5 font-semibold text-blue-700">
-                          {log.separateLegs ? (
-                            <span>
-                              V: {log.leftLegWeightKg ?? 0} kg | H: {log.rightLegWeightKg ?? 0} kg
-                            </span>
-                          ) : (
-                            <span>{log.weightKg ? `${log.weightKg} kg` : 'Kropsvægt'}</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 text-slate-500 italic">
-                          {log.notes || '—'}
-                        </td>
+                      <tr key={log.id} className="hover:bg-slate-50/80 transition-colors align-top">
+                        <td className="py-2.5 font-medium text-slate-800 whitespace-nowrap">{new Date(log.date).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                        {isScoreMode ? (<>
+                          <td className="py-2.5 text-slate-600 min-w-52">
+                            {(log.scoreResults || []).map((r) => <div key={r.round} className="whitespace-nowrap">R{r.round}: {r.leftScore !== undefined ? `V ${r.leftScore}` : ''}{r.leftScore !== undefined && r.rightScore !== undefined ? ' · ' : ''}{r.rightScore !== undefined ? `H ${r.rightScore}` : ''}{r.score !== undefined ? r.score : ''} {log.scoreUnit || ''}{r.notes ? ` — ${r.notes}` : ''}</div>)}
+                          </td>
+                          <td className="py-2.5 font-bold text-blue-700">{log.lsiPercent !== undefined ? `${log.lsiPercent}%` : chartData.find((d) => d.date === log.date)?.lsi != null ? `${chartData.find((d) => d.date === log.date)?.lsi}%` : '—'}</td>
+                        </>) : (<>
+                          <td className="py-2.5 text-slate-600">{log.sets} sæt × {log.reps} reps</td>
+                          <td className="py-2.5 font-semibold text-blue-700">{log.separateLegs ? <span>V: {log.leftLegWeightKg ?? 0} kg | H: {log.rightLegWeightKg ?? 0} kg</span> : <span>{log.weightKg ? `${log.weightKg} kg` : 'Kropsvægt'}</span>}</td>
+                        </>)}
+                        <td className="py-2.5 text-slate-500 italic max-w-xs">{log.notes || '—'}</td>
                       </tr>
                     ))}
                   </tbody>

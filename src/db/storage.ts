@@ -31,7 +31,8 @@ export const StorageService = {
       sessions: CompletedSession[];
     }>('/api/db-state');
 
-    // Seed a brand-new shared database once with the built-in starter content.
+    // Seed a brand-new shared database once with the built-in starter content first.
+    // This ensures the one-time rehab migration can also attach the real ExorLive PDF images to ex-1..ex-12.
     if ((!state.exercises || state.exercises.length === 0) && (!state.plans || state.plans.length === 0)) {
       await apiJson('/api/sync', {
         method: 'POST',
@@ -44,6 +45,9 @@ export const StorageService = {
         }),
       });
     }
+
+    // Idempotent migration: adds the ExorLive images, LSI test plan and historical test data once.
+    await apiJson('/api/migrations/rehab-2026', { method: 'POST' });
   },
 
   async getExercises(): Promise<Exercise[]> {
@@ -106,20 +110,40 @@ export const StorageService = {
     await apiJson(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
-  async getActiveWorkoutDraft(): Promise<WorkoutDraft | null> {
-    const data = await apiJson<{ draft: WorkoutDraft | null }>('/api/active-draft');
+  async getWorkoutDrafts(): Promise<WorkoutDraft[]> {
+    const data = await apiJson<{ drafts: WorkoutDraft[] }>('/api/drafts');
+    return data.drafts || [];
+  },
+
+  async getWorkoutDraftForPlan(planId: string): Promise<WorkoutDraft | null> {
+    const data = await apiJson<{ draft: WorkoutDraft | null }>(`/api/drafts/plan/${encodeURIComponent(planId)}`);
     return data.draft || null;
   },
 
-  async saveActiveWorkoutDraft(draft: WorkoutDraft): Promise<void> {
-    await apiJson('/api/active-draft', {
+  async saveWorkoutDraft(draft: WorkoutDraft): Promise<void> {
+    await apiJson('/api/drafts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ draft }),
     });
   },
 
-  async clearActiveWorkoutDraft(): Promise<void> {
+  async deleteWorkoutDraft(draftId: string): Promise<void> {
+    await apiJson(`/api/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' });
+  },
+
+  // Backwards-compatible aliases used by older UI code.
+  async getActiveWorkoutDraft(): Promise<WorkoutDraft | null> {
+    const drafts = await this.getWorkoutDrafts();
+    return drafts[0] || null;
+  },
+
+  async saveActiveWorkoutDraft(draft: WorkoutDraft): Promise<void> {
+    await this.saveWorkoutDraft(draft);
+  },
+
+  async clearActiveWorkoutDraft(draftId?: string): Promise<void> {
+    if (draftId) return this.deleteWorkoutDraft(draftId);
     await apiJson('/api/active-draft', { method: 'DELETE' });
   },
 

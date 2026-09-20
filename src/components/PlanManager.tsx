@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { WorkoutPlan, Exercise, PlanExercise } from '../types';
 import { getExerciseImageStyle } from '../utils/imageStyle';
+import { AddExerciseModal } from './AddExerciseModal';
+import { ExorLivePdfImportModal } from './ExorLivePdfImportModal';
 
 interface PlanManagerProps {
   plans: WorkoutPlan[];
@@ -28,6 +30,7 @@ interface PlanManagerProps {
   onSelectPlanToWorkOut: (planId: string) => void;
   onSavePlan: (plan: WorkoutPlan) => void;
   onDeletePlan: (planId: string) => void;
+  onSaveExercise: (exercise: Exercise) => Promise<void> | void;
 }
 
 export const PlanManager: React.FC<PlanManagerProps> = ({
@@ -37,11 +40,14 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
   onSelectPlanToWorkOut,
   onSavePlan,
   onDeletePlan,
+  onSaveExercise,
 }) => {
   const [editingPlan, setEditingPlan] = useState<WorkoutPlan | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [showExerciseSelector, setShowExerciseSelector] = useState(false);
   const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
+  const [showCreateExercise, setShowCreateExercise] = useState(false);
+  const [showPdfImport, setShowPdfImport] = useState(false);
 
   // Exercise selector modal filtering
   const [selectorCategory, setSelectorCategory] = useState<string>('alle');
@@ -134,6 +140,14 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
           leftLegReps: ex.defaultReps || '10-15',
           rightLegWeightKg: ex.defaultWeightKg ?? 0,
           rightLegReps: ex.defaultReps || '10-15',
+          trackingMode: ex.trackingMode || 'sets_reps_weight',
+          durationSeconds: ex.defaultDurationSeconds,
+          rounds: ex.defaultRounds,
+          restSeconds: ex.restSeconds,
+          scoreLabel: ex.scoreLabel,
+          scoreUnit: ex.scoreUnit,
+          lowerScoreIsBetter: ex.lowerScoreIsBetter,
+          scorePerSide: ex.scorePerSide,
         });
       }
     });
@@ -190,6 +204,14 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
         leftLegReps: exercise.defaultReps || '10-15',
         rightLegWeightKg: exercise.defaultWeightKg ?? 0,
         rightLegReps: exercise.defaultReps || '10-15',
+        trackingMode: exercise.trackingMode || 'sets_reps_weight',
+        durationSeconds: exercise.defaultDurationSeconds,
+        rounds: exercise.defaultRounds,
+        restSeconds: exercise.restSeconds,
+        scoreLabel: exercise.scoreLabel,
+        scoreUnit: exercise.scoreUnit,
+        lowerScoreIsBetter: exercise.lowerScoreIsBetter,
+        scorePerSide: exercise.scorePerSide,
       };
       setPlanExercises([...planExercises, newPlanEx]);
     }
@@ -453,14 +475,22 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setShowExerciseSelector(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs font-semibold transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Vælg øvelser fra bibliotek
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowExerciseSelector(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs font-semibold transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Vælg fra bibliotek
+                </button>
+                <button type="button" onClick={() => setShowCreateExercise(true)} className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200 text-xs font-semibold">
+                  <Plus className="w-3.5 h-3.5" /> Opret ny øvelse
+                </button>
+                <button type="button" onClick={() => setShowPdfImport(true)} className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 text-xs font-semibold">
+                  Importer ExorLive PDF
+                </button>
+              </div>
             </div>
 
             {planExercises.length === 0 ? (
@@ -505,6 +535,18 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
                       </button>
                     </div>
 
+                    {pe.trackingMode === 'timed_score' && (
+                      <div className="bg-white p-3 rounded-lg border border-blue-100 shadow-xs">
+                        <div className="text-[10px] font-bold text-blue-700 uppercase mb-2">Tid / score</div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          <div><label className="text-[10px] text-slate-500">Sekunder</label><input type="number" min="0" value={pe.durationSeconds ?? 0} onChange={(e) => handleUpdatePlanExercise(idx, 'durationSeconds', Number(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-slate-200 text-xs" /></div>
+                          <div><label className="text-[10px] text-slate-500">Runder/forsøg</label><input type="number" min="1" value={pe.rounds ?? 1} onChange={(e) => handleUpdatePlanExercise(idx, 'rounds', Number(e.target.value) || 1)} className="w-full px-2 py-1.5 rounded border border-slate-200 text-xs" /></div>
+                          <div><label className="text-[10px] text-slate-500">Pause sek.</label><input type="number" min="0" value={pe.restSeconds ?? 0} onChange={(e) => handleUpdatePlanExercise(idx, 'restSeconds', Number(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-slate-200 text-xs" /></div>
+                          <div><label className="text-[10px] text-slate-500">Enhed</label><input value={pe.scoreUnit || ''} onChange={(e) => handleUpdatePlanExercise(idx, 'scoreUnit', e.target.value)} className="w-full px-2 py-1.5 rounded border border-slate-200 text-xs" /></div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Leg selection checkbox */}
                     <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-xs">
                       <label className="flex items-center gap-2.5 cursor-pointer">
@@ -525,7 +567,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
                       </label>
 
                       {/* Inputs: Samlet (Standard) vs Individuelt */}
-                      {pe.separateLegs ? (
+                      {pe.trackingMode !== 'timed_score' && (pe.separateLegs ? (
                         <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
                           {/* Venstre ben */}
                           <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
@@ -660,7 +702,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
                             />
                           </div>
                         </div>
-                      )}
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -814,6 +856,29 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
           );
         })}
       </div>
+
+      {showCreateExercise && (
+        <AddExerciseModal
+          exercises={exercises}
+          onClose={() => setShowCreateExercise(false)}
+          onSave={async (exercise) => {
+            await onSaveExercise(exercise);
+            if (!planExercises.some((pe) => pe.exerciseId === exercise.id)) {
+              toggleExerciseInPlan(exercise);
+            }
+            setShowCreateExercise(false);
+          }}
+        />
+      )}
+
+      {showPdfImport && (
+        <ExorLivePdfImportModal
+          exercises={exercises}
+          onSaveExercise={onSaveExercise}
+          onSavePlan={onSavePlan}
+          onClose={() => setShowPdfImport(false)}
+        />
+      )}
 
       {/* Modal: Exercise Selector for Plan with Categories */}
       {showExerciseSelector && (() => {

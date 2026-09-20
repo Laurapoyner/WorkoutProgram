@@ -77,173 +77,141 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const [draftBannerMessage, setDraftBannerMessage] = useState<string | null>(null);
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
   const [showPartialModal, setShowPartialModal] = useState(false);
+  const [ongoingDrafts, setOngoingDrafts] = useState<WorkoutDraft[]>([]);
 
   // Modals
   const [inspectExercise, setInspectExercise] = useState<Exercise | null>(null);
   const [exerciseForImageUpload, setExerciseForImageUpload] = useState<Exercise | null>(null);
 
-  // Track if user has initialized to avoid overwriting ongoing progress
-  const hasInitializedRef = useRef(false);
+  // Track which plan/session has been loaded. This prevents background syncs from overwriting
+  // unsaved UI state while still allowing a different plan to load its own independent draft.
+  const loadedKeyRef = useRef<string>('');
 
-  // 1. Initial Load: Check for resumeSession or stored active draft
+  const refreshDraftList = useCallback(async () => {
+    try {
+      const drafts = await StorageService.getWorkoutDrafts();
+      setOngoingDrafts(drafts);
+    } catch (err) {
+      console.warn('Kunne ikke hente kladder', err);
+    }
+  }, []);
+
+  const freshExercisesForPlan = useCallback((plan: WorkoutPlan) => {
+    return plan.exercises.map((pe) => {
+      const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+      return {
+        ...pe,
+        imageUrl: baseEx?.imageUrl || pe.imageUrl,
+        imagePosition: baseEx?.imagePosition || pe.imagePosition,
+        trackingMode: pe.trackingMode || baseEx?.trackingMode || 'sets_reps_weight',
+        durationSeconds: pe.durationSeconds ?? baseEx?.defaultDurationSeconds,
+        rounds: pe.rounds ?? baseEx?.defaultRounds,
+        restSeconds: pe.restSeconds ?? baseEx?.restSeconds,
+        scoreLabel: pe.scoreLabel ?? baseEx?.scoreLabel,
+        scoreUnit: pe.scoreUnit ?? baseEx?.scoreUnit,
+        lowerScoreIsBetter: pe.lowerScoreIsBetter ?? baseEx?.lowerScoreIsBetter,
+        scorePerSide: pe.scorePerSide ?? baseEx?.scorePerSide,
+        isCompleted: false,
+        activeTimerSeconds: 0,
+      } as PlanExercise;
+    });
+  }, [allExercises]);
+
+  // Load the draft belonging to the selected plan only. Other unfinished workouts stay untouched.
   useEffect(() => {
     async function initSession() {
-      if (hasInitializedRef.current) return;
+      if (!currentPlan) return;
+      const loadKey = `${activePlanId}:${resumeSession?.id || ''}`;
+      if (loadedKeyRef.current === loadKey) return;
+      loadedKeyRef.current = loadKey;
+      setIsDraftLoaded(false);
+      setDraftBannerVisible(false);
+      setLastSavedTime(null);
+      setIsSessionTimerRunning(false);
+      setTimers({});
 
-      // Case A: User explicitly clicked "Genoptag / Gør færdig" on a past session
-      if (resumeSession) {
-        hasInitializedRef.current = true;
-        if (resumeSession.planId && resumeSession.planId !== activePlanId) {
-          onChangePlan(resumeSession.planId);
-        }
+      await refreshDraftList();
 
+      // Explicitly resume a partial historical session.
+      if (resumeSession && resumeSession.planId === activePlanId) {
         const targetPlan = plans.find((p) => p.id === resumeSession.planId) || currentPlan;
-        if (targetPlan) {
-          const mapped = targetPlan.exercises.map((pe) => {
-            const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
-            const loggedEntry = resumeSession.entries.find((e) => e.exerciseId === pe.exerciseId);
-
-            if (loggedEntry) {
-              return {
-                ...pe,
-                imageUrl: baseEx?.imageUrl || pe.imageUrl,
-                imagePosition: baseEx?.imagePosition || pe.imagePosition,
-                sets: loggedEntry.sets || pe.sets,
-                reps: loggedEntry.reps || pe.reps,
-                weightKg: loggedEntry.weightKg ?? pe.weightKg,
-                separateLegs: loggedEntry.separateLegs ?? pe.separateLegs,
-                leftLegWeightKg: loggedEntry.leftLegWeightKg ?? pe.leftLegWeightKg,
-                leftLegReps: loggedEntry.leftLegReps ?? pe.leftLegReps,
-                rightLegWeightKg: loggedEntry.rightLegWeightKg ?? pe.rightLegWeightKg,
-                rightLegReps: loggedEntry.rightLegReps ?? pe.rightLegReps,
-                notes: loggedEntry.notes ?? pe.notes,
-                isCompleted: true,
-                activeTimerSeconds: loggedEntry.durationSeconds || 0,
-              };
-            }
-
-            return {
-              ...pe,
-              imageUrl: baseEx?.imageUrl || pe.imageUrl,
-              imagePosition: baseEx?.imagePosition || pe.imagePosition,
-              isCompleted: false,
-              activeTimerSeconds: 0,
-            };
-          });
-
-          setSessionExercises(mapped);
-          setSessionSeconds(resumeSession.durationSeconds || 0);
-          setWorkoutDate(new Date().toISOString().split('T')[0]);
-          setDraftBannerMessage(
-            `Genoptaget pas fra ${new Date(resumeSession.date).toLocaleDateString('da-DK')}: De allerede udførte øvelser er markeret med flueben. Færdiggør de resterende herunder!`
-          );
-          setDraftBannerVisible(true);
-          setIsDraftLoaded(true);
-
-          if (onClearResumeSession) onClearResumeSession();
-          return;
-        }
-      }
-
-      // Case B: Check for automatic active draft in the shared MongoDB database
-      try {
-        const draft = await StorageService.getActiveWorkoutDraft();
-        if (draft && draft.exercises && draft.exercises.length > 0) {
-          // Check if draft has some meaningful progress
-          const hasProgress =
-            draft.sessionSeconds > 0 ||
-            draft.exercises.some(
-              (e) =>
-                e.isCompleted ||
-                (e.notes && e.notes.length > 0) ||
-                (e.weightKg !== undefined && e.weightKg > 0) ||
-                (e.leftLegWeightKg !== undefined && e.leftLegWeightKg > 0) ||
-                (e.rightLegWeightKg !== undefined && e.rightLegWeightKg > 0)
-            );
-
-          if (hasProgress) {
-            hasInitializedRef.current = true;
-            if (draft.planId && draft.planId !== activePlanId) {
-              onChangePlan(draft.planId);
-            }
-
-            // Merge image positions from current allExercises in case images were updated
-            const refreshedDraftExercises = draft.exercises.map((pe) => {
-              const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
-              return {
-                ...pe,
-                imageUrl: baseEx?.imageUrl || pe.imageUrl,
-                imagePosition: baseEx?.imagePosition || pe.imagePosition,
-              };
-            });
-
-            setSessionExercises(refreshedDraftExercises);
-            setSessionSeconds(draft.sessionSeconds || 0);
-            if (draft.workoutDate) setWorkoutDate(draft.workoutDate);
-            if (draft.timers) setTimers(draft.timers);
-
-            const updatedTime = draft.lastUpdated
-              ? new Date(draft.lastUpdated).toLocaleTimeString('da-DK', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              : 'for nylig';
-
-            const doneCount = refreshedDraftExercises.filter((e) => e.isCompleted).length;
-            setDraftBannerMessage(
-              `Uafsluttet træningspas fundet (${doneCount} af ${refreshedDraftExercises.length} øvelser udført • gemt kl. ${updatedTime}). Du kan fortsætte hvor du slap!`
-            );
-            setDraftBannerVisible(true);
-            setIsDraftLoaded(true);
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('Error reading active draft', err);
-      }
-
-      // Case C: Fresh initial workout from currentPlan
-      if (currentPlan) {
-        hasInitializedRef.current = true;
-        setSessionExercises(
-          currentPlan.exercises.map((pe) => {
-            const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
-            return {
-              ...pe,
-              imageUrl: baseEx?.imageUrl || pe.imageUrl,
-              imagePosition: baseEx?.imagePosition || pe.imagePosition,
-              isCompleted: false,
-              activeTimerSeconds: 0,
-            };
-          })
-        );
-        setIsDraftLoaded(true);
-      }
-    }
-
-    initSession();
-  }, [resumeSession, activePlanId, allExercises]);
-
-  // When changing plan manually (and not in initial resume/draft load)
-  const handleSwitchPlan = (newPlanId: string) => {
-    onChangePlan(newPlanId);
-    const plan = plans.find((p) => p.id === newPlanId);
-    if (plan) {
-      setSessionExercises(
-        plan.exercises.map((pe) => {
-          const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+        const mapped = freshExercisesForPlan(targetPlan).map((pe) => {
+          const loggedEntry = resumeSession.entries.find((e) => e.exerciseId === pe.exerciseId);
+          if (!loggedEntry) return pe;
           return {
             ...pe,
-            imageUrl: baseEx?.imageUrl || pe.imageUrl,
-            imagePosition: baseEx?.imagePosition || pe.imagePosition,
-            isCompleted: false,
-            activeTimerSeconds: 0,
+            sets: loggedEntry.sets || pe.sets,
+            reps: loggedEntry.reps || pe.reps,
+            weightKg: loggedEntry.weightKg ?? pe.weightKg,
+            separateLegs: loggedEntry.separateLegs ?? pe.separateLegs,
+            leftLegWeightKg: loggedEntry.leftLegWeightKg ?? pe.leftLegWeightKg,
+            leftLegReps: loggedEntry.leftLegReps ?? pe.leftLegReps,
+            rightLegWeightKg: loggedEntry.rightLegWeightKg ?? pe.rightLegWeightKg,
+            rightLegReps: loggedEntry.rightLegReps ?? pe.rightLegReps,
+            notes: loggedEntry.notes ?? pe.notes,
+            trackingMode: loggedEntry.trackingMode ?? pe.trackingMode,
+            scoreLabel: loggedEntry.scoreLabel ?? pe.scoreLabel,
+            scoreUnit: loggedEntry.scoreUnit ?? pe.scoreUnit,
+            lowerScoreIsBetter: loggedEntry.lowerScoreIsBetter ?? pe.lowerScoreIsBetter,
+            scoreResults: loggedEntry.scoreResults ?? pe.scoreResults,
+            isCompleted: true,
+            activeTimerSeconds: loggedEntry.durationSeconds || 0,
           };
-        })
-      );
-      setDraftBannerVisible(false);
-      StorageService.clearActiveWorkoutDraft();
+        });
+        setSessionExercises(mapped);
+        setSessionSeconds(resumeSession.durationSeconds || 0);
+        setWorkoutDate(new Date().toISOString().split('T')[0]);
+        setDraftBannerMessage(`Genoptaget tidligere pas: ${mapped.filter((e) => e.isCompleted).length} af ${mapped.length} øvelser er allerede registreret.`);
+        setDraftBannerVisible(true);
+        setIsDraftLoaded(true);
+        onClearResumeSession?.();
+        return;
+      }
+
+      try {
+        const draft = await StorageService.getWorkoutDraftForPlan(activePlanId);
+        if (draft?.exercises?.length) {
+          const refreshed = draft.exercises.map((pe) => {
+            const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+            return {
+              ...pe,
+              imageUrl: baseEx?.imageUrl || pe.imageUrl,
+              imagePosition: baseEx?.imagePosition || pe.imagePosition,
+            };
+          });
+          setSessionExercises(refreshed);
+          setSessionSeconds(draft.sessionSeconds || 0);
+          setWorkoutDate(draft.workoutDate || new Date().toISOString().split('T')[0]);
+          setTimers(draft.timers || {});
+          const doneCount = refreshed.filter((e) => e.isCompleted).length;
+          const updatedTime = new Date(draft.lastUpdated).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+          setDraftBannerMessage(`Kladde til dette program: ${doneCount} af ${refreshed.length} øvelser udført · gemt ${updatedTime}.`);
+          setDraftBannerVisible(true);
+          setIsDraftLoaded(true);
+          return;
+        }
+      } catch (err) {
+        console.warn('Error reading plan draft', err);
+      }
+
+      setSessionExercises(freshExercisesForPlan(currentPlan));
+      setSessionSeconds(0);
+      setWorkoutDate(new Date().toISOString().split('T')[0]);
+      setIsDraftLoaded(true);
     }
+    initSession();
+  }, [activePlanId, resumeSession?.id, currentPlan?.id, refreshDraftList, freshExercisesForPlan]);
+
+  // Switching programs saves the current one as a draft, then opens the target plan/draft.
+  const handleSwitchPlan = async (newPlanId: string) => {
+    if (newPlanId === activePlanId) return;
+    setIsSessionTimerRunning(false);
+    setTimers((prev) => Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, { ...v, isRunning: false }])));
+    try {
+      await saveDraftToStorage(sessionExercises, sessionSeconds);
+    } catch {}
+    loadedKeyRef.current = '';
+    onChangePlan(newPlanId);
   };
 
   // Overall session timer tick
@@ -300,6 +268,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       if (!hasActivity) return;
 
       const draft: WorkoutDraft = {
+        id: `draft-${currentPlan.id}`,
         planId: currentPlan.id,
         planTitle: currentPlan.title,
         workoutDate,
@@ -310,7 +279,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       };
 
       try {
-        await StorageService.saveActiveWorkoutDraft(draft);
+        await StorageService.saveWorkoutDraft(draft);
+        setOngoingDrafts((prev) => [draft, ...prev.filter((d) => d.id !== draft.id)]);
         setLastSavedTime(
           new Date().toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })
         );
@@ -366,6 +336,19 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     setSessionExercises((prev) =>
       prev.map((item) => (item.id === exerciseId ? { ...item, [field]: value } : item))
     );
+  };
+
+  const updateScoreResult = (exerciseId: string, round: number, field: 'score' | 'leftScore' | 'rightScore' | 'notes', value: any) => {
+    setSessionExercises((prev) => prev.map((item) => {
+      if (item.id !== exerciseId) return item;
+      const totalRounds = Math.max(1, item.rounds || 1);
+      const results = Array.from({ length: totalRounds }, (_, i) =>
+        item.scoreResults?.find((r) => r.round === i + 1) || { round: i + 1 }
+      );
+      const idx = Math.max(0, round - 1);
+      results[idx] = { ...results[idx], [field]: value };
+      return { ...item, scoreResults: results };
+    }));
   };
 
   const handleToggleComplete = (exerciseId: string) => {
@@ -425,7 +408,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       setIsSessionTimerRunning(false);
       setSessionSeconds(0);
       setTimers({});
-      await StorageService.clearActiveWorkoutDraft();
+      await StorageService.deleteWorkoutDraft(`draft-${currentPlan.id}`);
+      setOngoingDrafts((prev) => prev.filter((d) => d.id !== `draft-${currentPlan.id}`));
       setDraftBannerVisible(false);
 
       if (currentPlan) {
@@ -466,6 +450,19 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     completeAndSaveSession(false);
   };
 
+  const calculateScoreSymmetry = (exercise: PlanExercise): number | undefined => {
+    const left = (exercise.scoreResults || []).map((r) => r.leftScore).filter((v): v is number => typeof v === 'number');
+    const right = (exercise.scoreResults || []).map((r) => r.rightScore).filter((v): v is number => typeof v === 'number');
+    if (!left.length || !right.length) return undefined;
+    const pick = (values: number[]) => exercise.lowerScoreIsBetter ? Math.min(...values) : Math.max(...values);
+    const a = pick(left);
+    const b = pick(right);
+    if (a === 0 && b === 0) return 100;
+    const max = Math.max(Math.abs(a), Math.abs(b));
+    if (max === 0) return undefined;
+    return Math.round((Math.min(Math.abs(a), Math.abs(b)) / max) * 1000) / 10;
+  };
+
   // Complete and commit session to history & database
   const completeAndSaveSession = async (isPartial: boolean) => {
     setShowPartialModal(false);
@@ -491,6 +488,12 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         rightLegReps: e.rightLegReps || e.reps,
         durationSeconds: timers[e.id]?.seconds || e.activeTimerSeconds || undefined,
         notes: e.notes,
+        trackingMode: e.trackingMode,
+        scoreLabel: e.scoreLabel,
+        scoreUnit: e.scoreUnit,
+        lowerScoreIsBetter: e.lowerScoreIsBetter,
+        scoreResults: e.scoreResults,
+        lsiPercent: e.trackingMode === 'timed_score' ? calculateScoreSymmetry(e) : undefined,
       }));
 
     const session: CompletedSession = {
@@ -510,7 +513,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     };
 
     // Clear active draft since session is logged
-    await StorageService.clearActiveWorkoutDraft();
+    await StorageService.deleteWorkoutDraft(`draft-${currentPlan.id}`);
+    setOngoingDrafts((prev) => prev.filter((d) => d.id !== `draft-${currentPlan.id}`));
     setIsSessionTimerRunning(false);
     onCompleteWorkout(session);
   };
@@ -539,6 +543,25 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
   return (
     <div className="space-y-6">
+      {ongoingDrafts.filter((d) => d.planId !== activePlanId).length > 0 && (
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-slate-700 shadow-xs">
+          <div className="flex items-start gap-3">
+            <BookmarkCheck className="w-5 h-5 text-slate-500 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="font-bold text-xs text-slate-800">Du har {ongoingDrafts.filter((d) => d.planId !== activePlanId).length} anden uafsluttet træning</div>
+              <p className="text-[11px] text-slate-500 mt-0.5">De ligger neutralt som kladder. Du kan starte eller fortsætte et andet program uden at overskrive dem.</p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {ongoingDrafts.filter((d) => d.planId !== activePlanId).map((draft) => (
+                  <button key={draft.id} type="button" onClick={() => handleSwitchPlan(draft.planId)} className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-blue-300 hover:text-blue-700 text-[11px] font-semibold">
+                    Fortsæt: {draft.planTitle}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 1. RESUME / ONGOING DRAFT REASSURANCE BANNER */}
       {draftBannerVisible && draftBannerMessage && (
         <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in duration-300">
@@ -871,162 +894,69 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                       </div>
                     </div>
 
-                    {/* Weight & Reps Input Section */}
-                    <div className="space-y-2 pt-1 border-t border-slate-100">
-                      {/* Separate legs checkbox toggle */}
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={!!exercise.separateLegs}
-                            onChange={(e) => updateExerciseField(exercise.id, 'separateLegs', e.target.checked)}
-                            className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                          />
-                          <span>Opdel på venstre / højre ben</span>
-                        </label>
+                    {/* Tracking inputs */}
+                    {exercise.trackingMode === 'timed_score' ? (
+                      <div className="space-y-3 pt-1 border-t border-slate-100">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
+                          {exercise.durationSeconds ? <span className="px-2 py-1 rounded-lg bg-blue-50 text-blue-700 font-semibold">{exercise.durationSeconds} sek. pr. runde</span> : <span className="px-2 py-1 rounded-lg bg-slate-100 font-semibold">Forsøg uden fast tid</span>}
+                          <span className="px-2 py-1 rounded-lg bg-slate-100 font-semibold">{exercise.rounds || 1} runder/forsøg</span>
+                          {!!exercise.restSeconds && <span className="px-2 py-1 rounded-lg bg-slate-100 font-semibold">{exercise.restSeconds} sek. pause</span>}
+                          <span className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-semibold">Score: {exercise.scoreLabel || 'Score'} ({exercise.scoreUnit || '-'})</span>
+                        </div>
+
+                        <div className="space-y-2">
+                          {Array.from({ length: Math.max(1, exercise.rounds || 1) }, (_, i) => {
+                            const round = i + 1;
+                            const result = exercise.scoreResults?.find((r) => r.round === round) || { round };
+                            return (
+                              <div key={round} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Runde / forsøg {round}</div>
+                                {exercise.scorePerSide || exercise.separateLegs ? (
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <label className="text-[10px] text-slate-500">Venstre ({exercise.scoreUnit || 'score'})</label>
+                                      <input type="number" step="any" value={result.leftScore ?? ''} onChange={(e) => updateScoreResult(exercise.id, round, 'leftScore', e.target.value === '' ? undefined : Number(e.target.value))} className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] text-slate-500">Højre ({exercise.scoreUnit || 'score'})</label>
+                                      <input type="number" step="any" value={result.rightScore ?? ''} onChange={(e) => updateScoreResult(exercise.id, round, 'rightScore', e.target.value === '' ? undefined : Number(e.target.value))} className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold" />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <label className="text-[10px] text-slate-500">{exercise.scoreLabel || 'Score'} ({exercise.scoreUnit || '-'})</label>
+                                    <input type="number" step="any" value={result.score ?? ''} onChange={(e) => updateScoreResult(exercise.id, round, 'score', e.target.value === '' ? undefined : Number(e.target.value))} className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold" />
+                                  </div>
+                                )}
+                                <input type="text" value={result.notes || ''} onChange={(e) => updateScoreResult(exercise.id, round, 'notes', e.target.value)} placeholder="Note til denne runde (valgfri)" className="w-full mt-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px]" />
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-
-                      {/* Standard weight and sets/reps input */}
-                      {!exercise.separateLegs ? (
-                        <div className="grid grid-cols-3 gap-2">
-                          <div>
-                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                              Sæt
-                            </span>
-                            <input
-                              type="number"
-                              min="1"
-                              value={exercise.sets}
-                              onChange={(e) =>
-                                updateExerciseField(exercise.id, 'sets', parseInt(e.target.value) || 1)
-                              }
-                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
-                            />
-                          </div>
-
-                          <div>
-                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                              Gentagelser
-                            </span>
-                            <input
-                              type="text"
-                              value={exercise.reps}
-                              onChange={(e) => updateExerciseField(exercise.id, 'reps', e.target.value)}
-                              placeholder="10-15"
-                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
-                            />
-                          </div>
-
-                          <div>
-                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                              Belastning (kg)
-                            </span>
-                            <input
-                              type="number"
-                              step="0.5"
-                              min="0"
-                              value={exercise.weightKg ?? ''}
-                              onChange={(e) =>
-                                updateExerciseField(
-                                  exercise.id,
-                                  'weightKg',
-                                  e.target.value === '' ? undefined : parseFloat(e.target.value)
-                                )
-                              }
-                              placeholder="0 (krop)"
-                              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
-                            />
-                          </div>
+                    ) : (
+                      <div className="space-y-2 pt-1 border-t border-slate-100">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 cursor-pointer">
+                            <input type="checkbox" checked={!!exercise.separateLegs} onChange={(e) => updateExerciseField(exercise.id, 'separateLegs', e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5" />
+                            <span>Opdel på venstre / højre ben</span>
+                          </label>
                         </div>
-                      ) : (
-                        /* Unilateral left/right leg separate inputs */
-                        <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
-                          <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5">
-                            <span className="text-xs font-bold text-blue-700 block truncate">
-                              Venstre (V)
-                            </span>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              <div>
-                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
-                                  Kg
-                                </span>
-                                <input
-                                  type="number"
-                                  step="0.5"
-                                  min="0"
-                                  value={exercise.leftLegWeightKg ?? ''}
-                                  onChange={(e) =>
-                                    updateExerciseField(
-                                      exercise.id,
-                                      'leftLegWeightKg',
-                                      e.target.value === '' ? undefined : parseFloat(e.target.value)
-                                    )
-                                  }
-                                  placeholder="0"
-                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
-                                />
-                              </div>
-                              <div>
-                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
-                                  Reps
-                                </span>
-                                <input
-                                  type="text"
-                                  value={exercise.leftLegReps || exercise.reps}
-                                  onChange={(e) =>
-                                    updateExerciseField(exercise.id, 'leftLegReps', e.target.value)
-                                  }
-                                  placeholder="10-15"
-                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
-                                />
-                              </div>
-                            </div>
-                          </div>
 
-                          <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5">
-                            <span className="text-xs font-bold text-blue-700 block truncate">
-                              Højre (H)
-                            </span>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              <div>
-                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
-                                  Kg
-                                </span>
-                                <input
-                                  type="number"
-                                  step="0.5"
-                                  min="0"
-                                  value={exercise.rightLegWeightKg ?? ''}
-                                  onChange={(e) =>
-                                    updateExerciseField(
-                                      exercise.id,
-                                      'rightLegWeightKg',
-                                      e.target.value === '' ? undefined : parseFloat(e.target.value)
-                                    )
-                                  }
-                                  placeholder="0"
-                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
-                                />
-                              </div>
-                              <div>
-                                <span className="h-4 flex items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 truncate">
-                                  Reps
-                                </span>
-                                <input
-                                  type="text"
-                                  value={exercise.rightLegReps || exercise.reps}
-                                  onChange={(e) =>
-                                    updateExerciseField(exercise.id, 'rightLegReps', e.target.value)
-                                  }
-                                  placeholder="10-15"
-                                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
-                                />
-                              </div>
-                            </div>
+                        {!exercise.separateLegs ? (
+                          <div className="grid grid-cols-3 gap-2">
+                            <div><span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Sæt</span><input type="number" min="1" value={exercise.sets} onChange={(e) => updateExerciseField(exercise.id, 'sets', parseInt(e.target.value) || 1)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500" /></div>
+                            <div><span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Gentagelser</span><input type="text" value={exercise.reps} onChange={(e) => updateExerciseField(exercise.id, 'reps', e.target.value)} placeholder="10-15" className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500" /></div>
+                            <div><span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Belastning (kg)</span><input type="number" step="0.5" min="0" value={exercise.weightKg ?? ''} onChange={(e) => updateExerciseField(exercise.id, 'weightKg', e.target.value === '' ? undefined : parseFloat(e.target.value))} placeholder="0 (krop)" className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500" /></div>
                           </div>
-                        </div>
-                      )}
-                    </div>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                            <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5"><span className="text-xs font-bold text-blue-700 block">Venstre (V)</span><div className="grid grid-cols-2 gap-1.5"><div><span className="text-[10px] font-bold text-slate-500 uppercase">Kg</span><input type="number" step="0.5" min="0" value={exercise.leftLegWeightKg ?? ''} onChange={(e) => updateExerciseField(exercise.id, 'leftLegWeightKg', e.target.value === '' ? undefined : parseFloat(e.target.value))} className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold" /></div><div><span className="text-[10px] font-bold text-slate-500 uppercase">Reps</span><input type="text" value={exercise.leftLegReps || exercise.reps} onChange={(e) => updateExerciseField(exercise.id, 'leftLegReps', e.target.value)} className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold" /></div></div></div>
+                            <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-slate-200 space-y-1.5"><span className="text-xs font-bold text-blue-700 block">Højre (H)</span><div className="grid grid-cols-2 gap-1.5"><div><span className="text-[10px] font-bold text-slate-500 uppercase">Kg</span><input type="number" step="0.5" min="0" value={exercise.rightLegWeightKg ?? ''} onChange={(e) => updateExerciseField(exercise.id, 'rightLegWeightKg', e.target.value === '' ? undefined : parseFloat(e.target.value))} className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold" /></div><div><span className="text-[10px] font-bold text-slate-500 uppercase">Reps</span><input type="text" value={exercise.rightLegReps || exercise.reps} onChange={(e) => updateExerciseField(exercise.id, 'rightLegReps', e.target.value)} className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold" /></div></div></div>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Bottom Action: Note and Mark Complete */}
                     <div className="flex items-center justify-between gap-2 pt-1">
@@ -1101,15 +1031,12 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                       {exercise.name}
                     </h4>
                     <p className="text-xs text-slate-600">
-                      {exercise.separateLegs ? (
-                        <span>
-                          V: {exercise.leftLegWeightKg ?? 0} kg ({exercise.leftLegReps || exercise.reps}) • H:{' '}
-                          {exercise.rightLegWeightKg ?? 0} kg ({exercise.rightLegReps || exercise.reps})
-                        </span>
+                      {exercise.trackingMode === 'timed_score' ? (
+                        <span>{exercise.scoreResults?.length || 0} runder registreret · {exercise.scoreLabel || 'Score'} ({exercise.scoreUnit || '-'})</span>
+                      ) : exercise.separateLegs ? (
+                        <span>V: {exercise.leftLegWeightKg ?? 0} kg ({exercise.leftLegReps || exercise.reps}) • H: {exercise.rightLegWeightKg ?? 0} kg ({exercise.rightLegReps || exercise.reps})</span>
                       ) : (
-                        <span>
-                          {exercise.sets} sæt × {exercise.reps} • {exercise.weightKg ? `${exercise.weightKg} kg` : 'Kropsvægt'}
-                        </span>
+                        <span>{exercise.sets} sæt × {exercise.reps} • {exercise.weightKg ? `${exercise.weightKg} kg` : 'Kropsvægt'}</span>
                       )}
                       {exercise.notes && <span className="italic ml-2 text-slate-400">"{exercise.notes}"</span>}
                     </p>

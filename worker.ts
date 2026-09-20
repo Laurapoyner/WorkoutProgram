@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
+import { EXORLIVE_IMAGE_UPDATES, LSI_EXERCISES, LSI_PLAN, LSI_HISTORICAL_LOGS, LSI_HISTORICAL_SESSIONS, REHAB_MIGRATION_ID } from './src/db/rehabSeed';
 
 type Env = {
   MONGODB_URI: string;
@@ -133,6 +134,35 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ exercises, plans, logs, sessions });
   }
 
+  if (path === '/api/migrations/rehab-2026' && method === 'POST') {
+    const migrations = db.collection('migrations');
+    const already = await migrations.findOne({ id: REHAB_MIGRATION_ID });
+    if (already) return json({ success: true, alreadyApplied: true, migrationId: REHAB_MIGRATION_ID });
+
+    // Give the 12 ExorLive exercises their real PDF illustrations without recreating them.
+    for (const update of EXORLIVE_IMAGE_UPDATES) {
+      await db.collection('exercises').updateOne(
+        { id: update.id },
+        { $set: { imageUrl: update.imageUrl, imagePosition: update.imagePosition, updatedAt: update.updatedAt } },
+      );
+    }
+
+    // Add the standardized LSI protocol, its five tests and the user's historical measurements.
+    for (const exercise of LSI_EXERCISES) {
+      await db.collection('exercises').updateOne({ id: exercise.id }, { $setOnInsert: clean(exercise) }, { upsert: true });
+    }
+    await db.collection('plans').updateOne({ id: LSI_PLAN.id }, { $setOnInsert: clean(LSI_PLAN) }, { upsert: true });
+    for (const entry of LSI_HISTORICAL_LOGS) {
+      await db.collection('logs').updateOne({ id: entry.id }, { $setOnInsert: clean(entry) }, { upsert: true });
+    }
+    for (const session of LSI_HISTORICAL_SESSIONS) {
+      await db.collection('sessions').updateOne({ id: session.id }, { $setOnInsert: clean(session) }, { upsert: true });
+    }
+
+    await migrations.insertOne({ id: REHAB_MIGRATION_ID, appliedAt: new Date().toISOString() });
+    return json({ success: true, alreadyApplied: false, migrationId: REHAB_MIGRATION_ID });
+  }
+
   if (path === '/api/sync' && method === 'POST') {
     const body = await bodyJson(request);
     const { exercises = [], plans = [], logs = [], sessions = [] } = body || {};
@@ -221,26 +251,69 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ success: true, id, mode: 'mongodb' });
   }
 
+  // Multiple independent workout drafts. A draft is keyed by its stable draft.id, and each plan
+  // normally has one current draft. This lets the user pause one workout and start another.
+  if (path === '/api/drafts' && method === 'GET') {
+    const docs: any[] = await db.collection('drafts')
+      .find({ type: 'workout_draft' }, { projection: { _id: 0, data: 1, updatedAt: 1 } })
+      .sort({ updatedAt: -1 })
+      .toArray();
+    return json({ drafts: docs.map((d) => d.data).filter(Boolean) });
+  }
+  if (path === '/api/drafts' && method === 'POST') {
+    const body = await bodyJson(request);
+    const draft = body?.draft;
+    if (!draft?.planId) return json({ error: 'Draft og planId er påkrævet' }, 400);
+    const normalized = {
+      ...draft,
+      id: draft.id || `draft-${draft.planId}`,
+      lastUpdated: draft.lastUpdated || new Date().toISOString(),
+    };
+    await db.collection('drafts').updateOne(
+      { type: 'workout_draft', 'data.id': normalized.id },
+      { $set: { type: 'workout_draft', planId: normalized.planId, data: normalized, updatedAt: normalized.lastUpdated } },
+      { upsert: true },
+    );
+    return json({ success: true, draft: normalized, mode: 'mongodb' });
+  }
+  const draftByPlan = path.match(/^\/api\/drafts\/plan\/([^/]+)$/);
+  if (draftByPlan && method === 'GET') {
+    const planId = decodeURIComponent(draftByPlan[1]);
+    const doc: any = await db.collection('drafts').findOne(
+      { type: 'workout_draft', planId },
+      { projection: { _id: 0, data: 1 } },
+    );
+    return json({ draft: doc?.data || null });
+  }
+  const draftDelete = path.match(/^\/api\/drafts\/([^/]+)$/);
+  if (draftDelete && method === 'DELETE') {
+    const id = decodeURIComponent(draftDelete[1]);
+    await db.collection('drafts').deleteOne({ type: 'workout_draft', 'data.id': id });
+    return json({ success: true, id, mode: 'mongodb' });
+  }
+
+  // Legacy endpoint kept for compatibility with older deployed clients.
   if (path === '/api/active-draft' && method === 'GET') {
-    const draft: any = await db.collection('drafts').findOne({ type: 'active_workout' }, { projection: { _id: 0 } });
-    return json({ draft: draft?.data || null });
+    const doc: any = await db.collection('drafts').findOne(
+      { type: 'workout_draft' },
+      { projection: { _id: 0, data: 1 }, sort: { updatedAt: -1 } as any },
+    );
+    return json({ draft: doc?.data || null });
   }
   if (path === '/api/active-draft' && method === 'POST') {
     const body = await bodyJson(request);
     const draft = body?.draft;
-    if (draft) {
-      await db.collection('drafts').updateOne(
-        { type: 'active_workout' },
-        { $set: { type: 'active_workout', data: draft, updatedAt: new Date().toISOString() } },
-        { upsert: true },
-      );
-    } else {
-      await db.collection('drafts').deleteOne({ type: 'active_workout' });
-    }
+    if (!draft?.planId) return json({ error: 'Draft og planId er påkrævet' }, 400);
+    const normalized = { ...draft, id: draft.id || `draft-${draft.planId}` };
+    await db.collection('drafts').updateOne(
+      { type: 'workout_draft', 'data.id': normalized.id },
+      { $set: { type: 'workout_draft', planId: normalized.planId, data: normalized, updatedAt: new Date().toISOString() } },
+      { upsert: true },
+    );
     return json({ success: true, mode: 'mongodb' });
   }
   if (path === '/api/active-draft' && method === 'DELETE') {
-    await db.collection('drafts').deleteOne({ type: 'active_workout' });
+    await db.collection('drafts').deleteMany({ type: { $in: ['workout_draft', 'active_workout'] } });
     return json({ success: true, mode: 'mongodb' });
   }
 

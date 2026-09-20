@@ -669,6 +669,7 @@ export default function App() {
               }}
               onSavePlan={handleSavePlan}
               onDeletePlan={handleDeletePlan}
+              onSaveExercise={handleSaveExercise}
             />
           )}
 

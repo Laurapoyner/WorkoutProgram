@@ -1,7 +1,17 @@
 export interface ImagePosition {
-  x: number; // 0 - 100 percentage (horizontal focal point, default 50)
-  y: number; // 0 - 100 percentage (vertical focal point, default 50)
-  scale?: number; // 1 - 2.5 zoom level (default 1)
+  x: number;
+  y: number;
+  scale?: number;
+}
+
+export type ExerciseTrackingMode = 'sets_reps_weight' | 'timed_score';
+
+export interface ScoreRoundResult {
+  round: number;
+  score?: number;
+  leftScore?: number;
+  rightScore?: number;
+  notes?: string;
 }
 
 export interface Exercise {
@@ -11,12 +21,21 @@ export interface Exercise {
   imageUrl?: string;
   imagePosition?: ImagePosition;
   videoUrl?: string;
-  targetArea?: string; // fx 'Knæ', 'Lår', 'Hofte', 'Core'
+  targetArea?: string;
   defaultSets: number;
   defaultReps: string;
   defaultWeightKg?: number;
   isUnilateralByDefault?: boolean;
+  trackingMode?: ExerciseTrackingMode;
+  defaultDurationSeconds?: number;
+  defaultRounds?: number;
+  restSeconds?: number;
+  scoreLabel?: string;
+  scoreUnit?: string;
+  lowerScoreIsBetter?: boolean;
+  scorePerSide?: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface PlanExercise {
@@ -31,7 +50,7 @@ export interface PlanExercise {
   sets: number;
   reps: string;
   weightKg?: number;
-  separateLegs: boolean; // default false (samlet)
+  separateLegs: boolean;
   leftLegWeightKg?: number;
   leftLegReps?: string;
   rightLegWeightKg?: number;
@@ -40,6 +59,15 @@ export interface PlanExercise {
   isCompleted?: boolean;
   completedAt?: string;
   activeTimerSeconds?: number;
+  trackingMode?: ExerciseTrackingMode;
+  durationSeconds?: number;
+  rounds?: number;
+  restSeconds?: number;
+  scoreLabel?: string;
+  scoreUnit?: string;
+  lowerScoreIsBetter?: boolean;
+  scorePerSide?: boolean;
+  scoreResults?: ScoreRoundResult[];
 }
 
 export interface WorkoutPlan {
@@ -47,7 +75,7 @@ export interface WorkoutPlan {
   title: string;
   description?: string;
   frequency?: string;
-  scheduledDates: string[]; // YYYY-MM-DD
+  scheduledDates: string[];
   exercises: PlanExercise[];
   createdAt: string;
   updatedAt: string;
@@ -59,7 +87,7 @@ export interface ExerciseLogEntry {
   exerciseName: string;
   planId?: string;
   planTitle?: string;
-  date: string; // YYYY-MM-DD
+  date: string;
   timestamp: number;
   separateLegs: boolean;
   sets: number;
@@ -71,6 +99,12 @@ export interface ExerciseLogEntry {
   rightLegReps?: string;
   durationSeconds?: number;
   notes?: string;
+  trackingMode?: ExerciseTrackingMode;
+  scoreLabel?: string;
+  scoreUnit?: string;
+  lowerScoreIsBetter?: boolean;
+  scoreResults?: ScoreRoundResult[];
+  lsiPercent?: number;
 }
 
 export interface CompletedSession {
@@ -87,10 +121,11 @@ export interface CompletedSession {
   isPartial?: boolean;
   entries: ExerciseLogEntry[];
   remainingExercises?: PlanExercise[];
+  notes?: string;
 }
 
 export interface WorkoutDraft {
-  id?: string;
+  id: string;
   planId: string;
   planTitle: string;
   workoutDate: string;
@@ -100,4 +135,3 @@ export interface WorkoutDraft {
   timers?: { [exerciseId: string]: { seconds: number; isRunning: boolean } };
   isPartiallyCompleted?: boolean;
 }
-

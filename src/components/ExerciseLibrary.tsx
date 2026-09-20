@@ -9,6 +9,7 @@ import {
   Trash2,
   Camera,
   Image as ImageIcon,
+  Pencil,
 } from 'lucide-react';
 import { Exercise, ExerciseLogEntry } from '../types';
 import { AddExerciseModal } from './AddExerciseModal';
@@ -34,6 +35,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedExerciseForModal, setSelectedExerciseForModal] = useState<Exercise | null>(null);
   const [selectedExerciseForImage, setSelectedExerciseForImage] = useState<Exercise | null>(null);
+  const [selectedExerciseForEdit, setSelectedExerciseForEdit] = useState<Exercise | null>(null);
 
   // Derive unique target areas for filtering
   const targetAreas = useMemo(() => {
@@ -238,6 +240,15 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                         </button>
                       )}
 
+                      <button
+                        onClick={() => setSelectedExerciseForEdit(exercise)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
+                        title="Rediger øvelse"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>Rediger</span>
+                      </button>
+
                       {/* Progress button */}
                       <button
                         onClick={() => setSelectedExerciseForModal(exercise)}
@@ -280,6 +291,19 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
           exercise={selectedExerciseForModal}
           logs={logs}
           onClose={() => setSelectedExerciseForModal(null)}
+        />
+      )}
+
+      {/* Modal: Edit exercise */}
+      {selectedExerciseForEdit && (
+        <AddExerciseModal
+          exercises={exercises}
+          exerciseToEdit={selectedExerciseForEdit}
+          onClose={() => setSelectedExerciseForEdit(null)}
+          onSave={async (updated) => {
+            await onSaveExercise(updated);
+            setSelectedExerciseForEdit(null);
+          }}
         />
       )}
 
