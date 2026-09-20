@@ -39,6 +39,8 @@ type TabType = 'active' | 'plans' | 'library' | 'history';
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('active');
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [isAddExerciseModalOpen, setIsAddExerciseModalOpen] = useState(false);
@@ -69,43 +71,93 @@ export default function App() {
   // Success toast message
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Load from database on startup
+  // Synchronize data function: fetches latest state from backend/MongoDB Atlas
+  const syncWithDatabase = async (silent = false) => {
+    if (!silent) setIsSyncing(true);
+    try {
+      // 1. Refresh DB connection status
+      try {
+        const statusRes = await fetch('/api/db-status');
+        if (statusRes.ok) {
+          const st = await statusRes.json();
+          setDbStatus(st);
+        }
+      } catch {}
+
+      // 2. Load all latest data from backend / MongoDB Atlas
+      const [loadedExercises, loadedPlans, loadedLogs, loadedSessions] = await Promise.all([
+        StorageService.getExercises(),
+        StorageService.getPlans(),
+        StorageService.getLogs(),
+        StorageService.getCompletedSessions(),
+      ]);
+
+      if (loadedExercises && loadedExercises.length > 0) {
+        setExercises(loadedExercises);
+      }
+      if (loadedPlans && loadedPlans.length > 0) {
+        setPlans(loadedPlans);
+        setActivePlanId((curr) => {
+          if (curr && loadedPlans.some((p) => p.id === curr)) return curr;
+          return loadedPlans[0].id;
+        });
+      }
+      if (loadedLogs) setLogs(loadedLogs);
+      if (loadedSessions) setSessions(loadedSessions);
+
+      setLastSyncedAt(new Date());
+    } catch (err) {
+      console.error('Error synchronizing database', err);
+      if (!silent) {
+        showToast('Kunne ikke hente de nyeste ændringer');
+      }
+    } finally {
+      if (!silent) setIsSyncing(false);
+      setIsLoading(false);
+    }
+  };
+
+  // 1. Initial load on mount
   useEffect(() => {
-    async function loadData() {
+    async function init() {
       try {
         await StorageService.init();
-
-        // Fetch DB Status
-        try {
-          const statusRes = await fetch('/api/db-status');
-          if (statusRes.ok) {
-            const st = await statusRes.json();
-            setDbStatus(st);
-          }
-        } catch {}
-
-        const [loadedExercises, loadedPlans, loadedLogs, loadedSessions] = await Promise.all([
-          StorageService.getExercises(),
-          StorageService.getPlans(),
-          StorageService.getLogs(),
-          StorageService.getCompletedSessions(),
-        ]);
-
-        if (loadedExercises && loadedExercises.length > 0) setExercises(loadedExercises);
-        if (loadedPlans && loadedPlans.length > 0) {
-          setPlans(loadedPlans);
-          setActivePlanId(loadedPlans[0].id);
-        }
-        if (loadedLogs && loadedLogs.length > 0) setLogs(loadedLogs);
-        if (loadedSessions) setSessions(loadedSessions);
+        await syncWithDatabase(false);
       } catch (err) {
-        console.error('Error loading data from database', err);
-      } finally {
+        console.error('Error during init', err);
         setIsLoading(false);
       }
     }
+    init();
+  }, []);
 
-    loadData();
+  // 2. Cross-Device Synchronization:
+  // - Polls every 12 seconds so phone & computer remain constantly synchronized
+  // - Also immediately syncs whenever user switches back to this browser tab (document.visibilitychange)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncWithDatabase(true);
+      }
+    };
+
+    const handleFocus = () => {
+      syncWithDatabase(true);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    // Periodic polling every 12s
+    const pollInterval = setInterval(() => {
+      syncWithDatabase(true);
+    }, 12000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(pollInterval);
+    };
   }, []);
 
   const handleRetryDb = async () => {
@@ -334,15 +386,27 @@ export default function App() {
             <div className="mt-5 px-3 py-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/60 flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs text-emerald-300">
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSyncing ? 'bg-blue-400' : 'bg-emerald-400'} opacity-75`} />
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${isSyncing ? 'bg-blue-500' : 'bg-emerald-500'}`} />
                 </span>
                 <div>
-                  <div className="font-bold text-[11px] text-emerald-200">MongoDB Atlas</div>
-                  <div className="text-[10px] text-emerald-400 font-mono">fysiodanmark (Online)</div>
+                  <div className="font-bold text-[11px] text-emerald-200 flex items-center gap-1.5">
+                    MongoDB Atlas
+                    {isSyncing && <span className="text-[9px] font-normal text-blue-300">(syncer...)</span>}
+                  </div>
+                  <div className="text-[10px] text-emerald-400 font-mono">
+                    {lastSyncedAt ? `Synkroniseret kl. ${lastSyncedAt.toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })}` : 'Online • Synkron'}
+                  </div>
                 </div>
               </div>
-              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <button
+                onClick={() => syncWithDatabase(false)}
+                disabled={isSyncing}
+                title="Manuel synkronisering"
+                className="p-1 rounded-lg hover:bg-emerald-900/60 text-emerald-400 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              </button>
             </div>
           ) : dbStatus.hasMongoUri ? (
             <div className="mt-5 p-3 rounded-xl bg-amber-950/50 border border-amber-600/40 text-left">
@@ -494,6 +558,23 @@ export default function App() {
 
           {/* Right actions: Blue Button, Notification Bell, User profile pill */}
           <div className="flex items-center gap-3 shrink-0">
+            {/* Live Cross-Device Sync Indicator & Manual Refresh Button */}
+            <button
+              id="topbar-btn-sync"
+              onClick={() => {
+                syncWithDatabase(false);
+                showToast('Synkroniserer med databasen...');
+              }}
+              disabled={isSyncing}
+              title="Synkroniser på tværs af enheder (mobil & PC)"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline">
+                {isSyncing ? 'Synkroniserer...' : 'Synkroniser'}
+              </span>
+            </button>
+
             {/* Blue outlined "+ Opret øvelse" button (matching screenshot's "SKIFT TIL ADMIN" style in blue) */}
             <button
               id="topbar-btn-add-exercise"

@@ -8,6 +8,8 @@ import {
   Sparkles,
   Camera,
   Trash2,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { StorageService } from '../db/storage';
 import { Exercise, ImagePosition } from '../types';
@@ -17,7 +19,7 @@ import { compressImageFile } from '../utils/imageCompressor';
 interface ImageUploadModalProps {
   exercise: Exercise;
   onClose: () => void;
-  onSaveImage: (updatedExercise: Exercise) => void;
+  onSaveImage: (updatedExercise: Exercise) => Promise<void> | void;
 }
 
 // Preset exercise illustrations that look crisp, modern, and clinical
@@ -60,6 +62,8 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
   );
   const [urlInput, setUrlInput] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,6 +73,7 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
       return;
     }
     setIsUploading(true);
+    setSaveError(null);
     try {
       const compressedBase64 = await compressImageFile(file, 1400, 1400, 0.86);
       const savedUrl = await StorageService.uploadImage(compressedBase64, file.name);
@@ -106,17 +111,27 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
     if (urlInput.trim()) {
       setCurrentImage(urlInput.trim());
       setUrlInput('');
+      setSaveError(null);
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const updated: Exercise = {
       ...exercise,
       imageUrl: currentImage,
       imagePosition: currentImage ? imagePosition : undefined,
     };
-    onSaveImage(updated);
-    onClose();
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSaveImage(updated);
+      onClose();
+    } catch (err: any) {
+      console.error('Fejl ved gemning af billede:', err);
+      setSaveError(err.message || 'Kunne ikke gemme billedet på serveren.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -361,22 +376,41 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
           )}
         </div>
 
+        {/* Error notice if saving fails */}
+        {saveError && (
+          <div className="mx-6 mb-2 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+            <div className="flex-1 leading-snug">{saveError}</div>
+          </div>
+        )}
+
         {/* Modal Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 bg-slate-50 border-t border-slate-100">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-200/70 transition-colors"
+            disabled={isSaving}
+            className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-200/70 transition-colors disabled:opacity-50"
           >
             Annuller
           </button>
           <button
             type="button"
             onClick={handleSave}
-            className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 flex items-center gap-1.5"
+            disabled={isSaving || isUploading}
+            className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
           >
-            <Check className="w-4 h-4" />
-            Gem billede til øvelse
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Gemmer i skyen...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4" />
+                Gem billede til øvelse
+              </>
+            )}
           </button>
         </div>
       </div>

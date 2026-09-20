@@ -288,8 +288,8 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
         <ImageUploadModal
           exercise={selectedExerciseForImage}
           onClose={() => setSelectedExerciseForImage(null)}
-          onSaveImage={(updated) => {
-            onSaveExercise(updated);
+          onSaveImage={async (updated) => {
+            await onSaveExercise(updated);
             setSelectedExerciseForImage(null);
           }}
         />

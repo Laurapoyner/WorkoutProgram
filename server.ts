@@ -194,13 +194,14 @@ app.post('/api/db-retry', async (req, res) => {
 
 // Seed / check initial data
 app.get('/api/db-state', async (req, res) => {
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
       const [exercises, plans, logs, sessions] = await Promise.all([
-        mongoDb.collection('exercises').find({}, { projection: { _id: 0 } }).toArray(),
-        mongoDb.collection('plans').find({}, { projection: { _id: 0 } }).toArray(),
-        mongoDb.collection('logs').find({}, { projection: { _id: 0 } }).toArray(),
-        mongoDb.collection('sessions').find({}, { projection: { _id: 0 } }).toArray(),
+        db.collection('exercises').find({}, { projection: { _id: 0 } }).toArray(),
+        db.collection('plans').find({}, { projection: { _id: 0 } }).toArray(),
+        db.collection('logs').find({}, { projection: { _id: 0 } }).toArray(),
+        db.collection('sessions').find({}, { projection: { _id: 0 } }).toArray(),
       ]);
       return res.json({ exercises, plans, logs, sessions });
     } catch (err) {
@@ -208,32 +209,39 @@ app.get('/api/db-state', async (req, res) => {
     }
   }
 
-  const db = readLocalDB();
-  res.json(db);
+  const local = readLocalDB();
+  res.json(local);
 });
 
 // Initial bulk seed or sync
 app.post('/api/sync', async (req, res) => {
   const { exercises, plans, logs, sessions } = req.body;
 
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
       if (exercises && exercises.length > 0) {
         for (const ex of exercises) {
           const { _id, ...cleanEx } = ex;
-          await mongoDb.collection('exercises').updateOne({ id: cleanEx.id }, { $set: cleanEx }, { upsert: true });
+          await db.collection('exercises').updateOne({ id: cleanEx.id }, { $set: cleanEx }, { upsert: true });
         }
       }
       if (plans && plans.length > 0) {
         for (const plan of plans) {
           const { _id, ...cleanPlan } = plan;
-          await mongoDb.collection('plans').updateOne({ id: cleanPlan.id }, { $set: cleanPlan }, { upsert: true });
+          await db.collection('plans').updateOne({ id: cleanPlan.id }, { $set: cleanPlan }, { upsert: true });
         }
       }
       if (logs && logs.length > 0) {
         for (const log of logs) {
           const { _id, ...cleanLog } = log;
-          await mongoDb.collection('logs').updateOne({ id: cleanLog.id }, { $set: cleanLog }, { upsert: true });
+          await db.collection('logs').updateOne({ id: cleanLog.id }, { $set: cleanLog }, { upsert: true });
+        }
+      }
+      if (sessions && sessions.length > 0) {
+        for (const sess of sessions) {
+          const { _id, ...cleanSess } = sess;
+          await db.collection('sessions').updateOne({ id: cleanSess.id }, { $set: cleanSess }, { upsert: true });
         }
       }
       return res.json({ success: true, mode: 'mongodb' });
@@ -359,17 +367,18 @@ app.delete('/api/exercises/:id', async (req, res) => {
 
 // Plans
 app.get('/api/plans', async (req, res) => {
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
-      const plans = await mongoDb.collection('plans').find({}, { projection: { _id: 0 } }).toArray();
+      const plans = await db.collection('plans').find({}, { projection: { _id: 0 } }).toArray();
       return res.json(plans);
     } catch (err) {
       console.warn('MongoDB error fetching plans', err);
     }
   }
 
-  const db = readLocalDB();
-  res.json(db.plans || []);
+  const dbLocal = readLocalDB();
+  res.json(dbLocal.plans || []);
 });
 
 app.post('/api/plans', async (req, res) => {
@@ -378,105 +387,111 @@ app.post('/api/plans', async (req, res) => {
     return res.status(400).json({ error: 'Plan and id are required' });
   }
 
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
       const { _id, ...cleanPlan } = plan;
-      await mongoDb.collection('plans').updateOne({ id: cleanPlan.id }, { $set: cleanPlan }, { upsert: true });
+      await db.collection('plans').updateOne({ id: cleanPlan.id }, { $set: cleanPlan }, { upsert: true });
       return res.json({ success: true, plan: cleanPlan, mode: 'mongodb' });
     } catch (err) {
       console.warn('MongoDB error saving plan', err);
     }
   }
 
-  const db = readLocalDB();
-  const existingIdx = db.plans.findIndex((p: any) => p.id === plan.id);
+  const dbLocal = readLocalDB();
+  const existingIdx = dbLocal.plans.findIndex((p: any) => p.id === plan.id);
   if (existingIdx >= 0) {
-    db.plans[existingIdx] = plan;
+    dbLocal.plans[existingIdx] = plan;
   } else {
-    db.plans.push(plan);
+    dbLocal.plans.push(plan);
   }
-  writeLocalDB(db);
+  writeLocalDB(dbLocal);
   res.json({ success: true, plan, mode: 'local' });
 });
 
 app.delete('/api/plans/:id', async (req, res) => {
   const { id } = req.params;
 
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
-      await mongoDb.collection('plans').deleteOne({ id });
+      await db.collection('plans').deleteOne({ id });
       return res.json({ success: true, id, mode: 'mongodb' });
     } catch (err) {
       console.warn('MongoDB error deleting plan', err);
     }
   }
 
-  const db = readLocalDB();
-  db.plans = db.plans.filter((p: any) => p.id !== id);
-  writeLocalDB(db);
+  const dbLocal = readLocalDB();
+  dbLocal.plans = dbLocal.plans.filter((p: any) => p.id !== id);
+  writeLocalDB(dbLocal);
   res.json({ success: true, id, mode: 'local' });
 });
 
 // Logs
 app.get('/api/logs', async (req, res) => {
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
-      const logs = await mongoDb.collection('logs').find({}, { projection: { _id: 0 } }).sort({ timestamp: -1 }).toArray();
+      const logs = await db.collection('logs').find({}, { projection: { _id: 0 } }).sort({ timestamp: -1 }).toArray();
       return res.json(logs);
     } catch (err) {
       console.warn('MongoDB error fetching logs', err);
     }
   }
 
-  const db = readLocalDB();
-  res.json(db.logs || []);
+  const dbLocal = readLocalDB();
+  res.json(dbLocal.logs || []);
 });
 
 app.post('/api/logs', async (req, res) => {
   const entry = req.body;
 
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
       const { _id, ...cleanEntry } = entry;
-      await mongoDb.collection('logs').updateOne({ id: cleanEntry.id }, { $set: cleanEntry }, { upsert: true });
+      await db.collection('logs').updateOne({ id: cleanEntry.id }, { $set: cleanEntry }, { upsert: true });
       return res.json({ success: true, entry: cleanEntry, mode: 'mongodb' });
     } catch (err) {
       console.warn('MongoDB error saving log', err);
     }
   }
 
-  const db = readLocalDB();
-  db.logs.unshift(entry);
-  writeLocalDB(db);
+  const dbLocal = readLocalDB();
+  dbLocal.logs.unshift(entry);
+  writeLocalDB(dbLocal);
   res.json({ success: true, entry, mode: 'local' });
 });
 
 // Sessions
 app.get('/api/sessions', async (req, res) => {
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
-      const sessions = await mongoDb.collection('sessions').find({}, { projection: { _id: 0 } }).sort({ completedAt: -1 }).toArray();
+      const sessions = await db.collection('sessions').find({}, { projection: { _id: 0 } }).sort({ completedAt: -1 }).toArray();
       return res.json(sessions);
     } catch (err) {
       console.warn('MongoDB error fetching sessions', err);
     }
   }
 
-  const db = readLocalDB();
-  res.json(db.sessions || []);
+  const dbLocal = readLocalDB();
+  res.json(dbLocal.sessions || []);
 });
 
 app.post('/api/sessions', async (req, res) => {
   const session = req.body;
 
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
       const { _id, ...cleanSession } = session;
-      await mongoDb.collection('sessions').updateOne({ id: cleanSession.id }, { $set: cleanSession }, { upsert: true });
+      await db.collection('sessions').updateOne({ id: cleanSession.id }, { $set: cleanSession }, { upsert: true });
       if (cleanSession.entries && Array.isArray(cleanSession.entries)) {
         for (const entry of cleanSession.entries) {
           const { _id: entryId, ...cleanEntry } = entry;
-          await mongoDb.collection('logs').updateOne({ id: cleanEntry.id }, { $set: cleanEntry }, { upsert: true });
+          await db.collection('logs').updateOne({ id: cleanEntry.id }, { $set: cleanEntry }, { upsert: true });
         }
       }
       return res.json({ success: true, session: cleanSession, mode: 'mongodb' });
@@ -485,38 +500,40 @@ app.post('/api/sessions', async (req, res) => {
     }
   }
 
-  const db = readLocalDB();
-  db.sessions.unshift(session);
+  const dbLocal = readLocalDB();
+  dbLocal.sessions.unshift(session);
   if (session.entries && Array.isArray(session.entries)) {
-    db.logs.unshift(...session.entries);
+    dbLocal.logs.unshift(...session.entries);
   }
-  writeLocalDB(db);
+  writeLocalDB(dbLocal);
   res.json({ success: true, session, mode: 'local' });
 });
 
 app.delete('/api/sessions/:id', async (req, res) => {
   const { id } = req.params;
 
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
-      await mongoDb.collection('sessions').deleteOne({ id });
+      await db.collection('sessions').deleteOne({ id });
       return res.json({ success: true, id, mode: 'mongodb' });
     } catch (err) {
       console.warn('MongoDB error deleting session', err);
     }
   }
 
-  const db = readLocalDB();
-  db.sessions = (db.sessions || []).filter((s: any) => s.id !== id);
-  writeLocalDB(db);
+  const dbLocal = readLocalDB();
+  dbLocal.sessions = (dbLocal.sessions || []).filter((s: any) => s.id !== id);
+  writeLocalDB(dbLocal);
   res.json({ success: true, id, mode: 'local' });
 });
 
 // Active workout draft endpoints (allows resuming unfinished workouts)
 app.get('/api/active-draft', async (req, res) => {
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
-      const draft = await mongoDb.collection('drafts').findOne({ type: 'active_workout' }, { projection: { _id: 0 } });
+      const draft = await db.collection('drafts').findOne({ type: 'active_workout' }, { projection: { _id: 0 } });
       if (draft) {
         return res.json({ draft: draft.data });
       }
@@ -525,23 +542,24 @@ app.get('/api/active-draft', async (req, res) => {
     }
   }
 
-  const db = readLocalDB();
-  res.json({ draft: db.draft || null });
+  const local = readLocalDB();
+  res.json({ draft: local.draft || null });
 });
 
 app.post('/api/active-draft', async (req, res) => {
   const { draft } = req.body;
 
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
       if (draft) {
-        await mongoDb.collection('drafts').updateOne(
+        await db.collection('drafts').updateOne(
           { type: 'active_workout' },
           { $set: { type: 'active_workout', data: draft, updatedAt: new Date().toISOString() } },
           { upsert: true }
         );
       } else {
-        await mongoDb.collection('drafts').deleteOne({ type: 'active_workout' });
+        await db.collection('drafts').deleteOne({ type: 'active_workout' });
       }
       return res.json({ success: true, mode: 'mongodb' });
     } catch (err) {
@@ -549,25 +567,26 @@ app.post('/api/active-draft', async (req, res) => {
     }
   }
 
-  const db = readLocalDB();
-  db.draft = draft || null;
-  writeLocalDB(db);
+  const local = readLocalDB();
+  local.draft = draft || null;
+  writeLocalDB(local);
   res.json({ success: true, mode: 'local' });
 });
 
 app.delete('/api/active-draft', async (req, res) => {
-  if (mongoConnected && mongoDb) {
+  const db = await getMongoDb();
+  if (db) {
     try {
-      await mongoDb.collection('drafts').deleteOne({ type: 'active_workout' });
+      await db.collection('drafts').deleteOne({ type: 'active_workout' });
       return res.json({ success: true, mode: 'mongodb' });
     } catch (err) {
       console.warn('MongoDB error deleting draft', err);
     }
   }
 
-  const db = readLocalDB();
-  db.draft = null;
-  writeLocalDB(db);
+  const local = readLocalDB();
+  local.draft = null;
+  writeLocalDB(local);
   res.json({ success: true, mode: 'local' });
 });
 

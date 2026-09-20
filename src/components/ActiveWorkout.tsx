@@ -1269,9 +1269,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         <ImageUploadModal
           exercise={exerciseForImageUpload}
           onClose={() => setExerciseForImageUpload(null)}
-          onSaveImage={(updated) => {
+          onSaveImage={async (updated) => {
             if (onUpdateExercise) {
-              onUpdateExercise(updated);
+              await onUpdateExercise(updated);
             }
             setSessionExercises((prev) =>
               prev.map((item) =>
