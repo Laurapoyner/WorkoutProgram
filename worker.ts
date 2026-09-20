@@ -7,11 +7,6 @@ type Env = {
   ASSETS: Fetcher;
 };
 
-let mongoClient: MongoClient | null = null;
-let mongoDb: Db | null = null;
-let connectingPromise: Promise<Db> | null = null;
-let currentUri: string | null = null;
-let currentDbName: string | null = null;
 
 function publicMongoError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
@@ -21,45 +16,31 @@ function publicMongoError(err: unknown): string {
   return msg || 'Ukendt MongoDB-fejl';
 }
 
-async function getMongoDb(env: Env): Promise<Db> {
+async function openMongoDb(env: Env): Promise<{ client: MongoClient; db: Db }> {
   const uri = env.MONGODB_URI;
   const dbName = env.MONGODB_DB_NAME || 'workout_program';
 
   if (!uri) throw new Error('MONGODB_URI mangler i Cloudflare Worker secrets');
 
-  if (mongoDb && currentUri === uri && currentDbName === dbName) return mongoDb;
-  if (connectingPromise) return connectingPromise;
+  const client = new MongoClient(uri, {
+    serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
+    connectTimeoutMS: 8000,
+    serverSelectionTimeoutMS: 8000,
+    maxPoolSize: 1,
+    minPoolSize: 0,
+    maxConnecting: 1,
+    maxIdleTimeMS: 1000,
+  });
 
-  connectingPromise = (async () => {
-    if (mongoClient && (currentUri !== uri || currentDbName !== dbName)) {
-      await mongoClient.close().catch(() => undefined);
-      mongoClient = null;
-      mongoDb = null;
-    }
-
-    try {
-      mongoClient = new MongoClient(uri, {
-        serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
-        connectTimeoutMS: 10000,
-        serverSelectionTimeoutMS: 10000,
-      });
-      await mongoClient.connect();
-      await mongoClient.db('admin').command({ ping: 1 });
-      mongoDb = mongoClient.db(dbName);
-      currentUri = uri;
-      currentDbName = dbName;
-      return mongoDb;
-    } catch (err) {
-      mongoDb = null;
-      if (mongoClient) await mongoClient.close().catch(() => undefined);
-      mongoClient = null;
-      throw err;
-    } finally {
-      connectingPromise = null;
-    }
-  })();
-
-  return connectingPromise;
+  try {
+    await client.connect();
+    const db = client.db(dbName);
+    await db.command({ ping: 1 });
+    return { client, db };
+  } catch (err) {
+    await client.close().catch(() => undefined);
+    throw err;
+  }
 }
 
 function clean<T extends Record<string, any>>(value: T): T {
@@ -92,43 +73,55 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   const method = request.method.toUpperCase();
 
   if (path === '/api/health' && method === 'GET') {
+    let client: MongoClient | null = null;
     try {
-      const db = await getMongoDb(env);
-      return json({ status: 'ok', database: 'mongodb', connected: true, databaseName: db.databaseName, serverTime: new Date().toISOString() });
+      const connection = await openMongoDb(env);
+      client = connection.client;
+      return json({ status: 'ok', database: 'mongodb', connected: true, databaseName: connection.db.databaseName, serverTime: new Date().toISOString() });
     } catch (err) {
       return json({ status: 'error', database: 'mongodb', connected: false, error: publicMongoError(err), serverTime: new Date().toISOString() }, 503);
+    } finally {
+      if (client) await client.close().catch(() => undefined);
     }
   }
 
   if (path === '/api/db-status' && method === 'GET') {
+    let client: MongoClient | null = null;
     try {
-      const db = await getMongoDb(env);
-      return json({ type: 'mongodb', connected: true, databaseName: db.databaseName, hasMongoUri: Boolean(env.MONGODB_URI), error: null });
+      const connection = await openMongoDb(env);
+      client = connection.client;
+      return json({ type: 'mongodb', connected: true, databaseName: connection.db.databaseName, hasMongoUri: Boolean(env.MONGODB_URI), error: null });
     } catch (err) {
       return json({ type: 'mongodb', connected: false, databaseName: env.MONGODB_DB_NAME || 'workout_program', hasMongoUri: Boolean(env.MONGODB_URI), error: publicMongoError(err) });
+    } finally {
+      if (client) await client.close().catch(() => undefined);
     }
   }
 
   if (path === '/api/db-retry' && method === 'POST') {
-    if (mongoClient) await mongoClient.close().catch(() => undefined);
-    mongoClient = null;
-    mongoDb = null;
-    currentUri = null;
-    currentDbName = null;
+    let client: MongoClient | null = null;
     try {
-      const db = await getMongoDb(env);
-      return json({ success: true, connected: true, databaseName: db.databaseName, error: null });
+      const connection = await openMongoDb(env);
+      client = connection.client;
+      return json({ success: true, connected: true, databaseName: connection.db.databaseName, error: null });
     } catch (err) {
       return json({ success: false, connected: false, databaseName: env.MONGODB_DB_NAME || 'workout_program', error: publicMongoError(err) }, 503);
+    } finally {
+      if (client) await client.close().catch(() => undefined);
     }
   }
 
+  let client: MongoClient | null = null;
   let db: Db;
   try {
-    db = await getMongoDb(env);
+    const connection = await openMongoDb(env);
+    client = connection.client;
+    db = connection.db;
   } catch (err) {
     return json({ error: `Den fælles MongoDB-database er ikke tilgængelig: ${publicMongoError(err)}`, code: 'DATABASE_UNAVAILABLE' }, 503);
   }
+
+  try {
 
   if (path === '/api/db-state' && method === 'GET') {
     const [exercises, plans, logs, sessions] = await Promise.all([
@@ -323,7 +316,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ success: true, mode: 'mongodb' });
   }
 
-  return json({ error: 'API endpoint ikke fundet' }, 404);
+    return json({ error: 'API endpoint ikke fundet' }, 404);
+  } finally {
+    if (client) await client.close().catch(() => undefined);
+  }
 }
 
 export default {
