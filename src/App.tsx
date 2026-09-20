@@ -58,13 +58,7 @@ export default function App() {
     databaseName: string;
     hasMongoUri: boolean;
     error?: string | null;
-  }>({
-    type: 'local_json',
-    connected: true,
-    databaseName: 'Lokal fil',
-    hasMongoUri: false,
-    error: null,
-  });
+  } | null>(null);
   const [isReconnectingDb, setIsReconnectingDb] = useState(false);
   const [showDbInfoModal, setShowDbInfoModal] = useState(false);
 
@@ -117,10 +111,18 @@ export default function App() {
     }
   };
 
-  // 1. Initial load on mount
+  // 1. Initial load on mount - fetch DB status immediately in parallel
   useEffect(() => {
     async function init() {
       try {
+        // Fetch status immediately to avoid false "local database" flash
+        fetch('/api/db-status')
+          .then((res) => (res.ok ? res.json() : null))
+          .then((st) => {
+            if (st) setDbStatus(st);
+          })
+          .catch(() => {});
+
         await StorageService.init();
         await syncWithDatabase(false);
       } catch (err) {
@@ -188,7 +190,9 @@ export default function App() {
         if (loadedSessions) setSessions(loadedSessions);
       } else {
         setDbStatus((prev) => ({
-          ...prev,
+          type: prev?.type || 'local_json',
+          databaseName: prev?.databaseName || 'Local File',
+          hasMongoUri: prev?.hasMongoUri ?? true,
           connected: false,
           error: data.error,
         }));
@@ -247,8 +251,8 @@ export default function App() {
         updatedExercises = [savedEx, ...exercises];
       }
       setExercises(updatedExercises);
-      if (res?.mode === 'mongodb') {
-        showToast(`Øvelsen "${savedEx.name}" blev gemt permanent i MongoDB Atlas!`);
+      if (res?.mode === 'mongodb' || dbStatus?.connected) {
+        showToast(`Øvelsen "${savedEx.name}" blev gemt i MongoDB Atlas!`);
       } else {
         showToast(`Øvelsen "${savedEx.name}" blev gemt lokalt.`);
       }
@@ -382,7 +386,14 @@ export default function App() {
           </div>
 
           {/* Database indicator tag */}
-          {dbStatus.connected && dbStatus.type === 'mongodb' ? (
+          {!dbStatus ? (
+            <div className="mt-5 px-3 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                <span className="font-semibold text-[11px] text-slate-200">Forbinder til online database...</span>
+              </div>
+            </div>
+          ) : dbStatus.connected && dbStatus.type === 'mongodb' ? (
             <div className="mt-5 px-3 py-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/60 flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs text-emerald-300">
                 <span className="relative flex h-2 w-2">
@@ -446,12 +457,11 @@ export default function App() {
             <div className="mt-5 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs text-slate-300">
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-500" />
                 </span>
                 <span className="font-semibold text-[11px]">Lokal Database</span>
               </div>
-              <span className="text-[10px] font-mono text-slate-400">Aktiv</span>
+              <span className="text-[10px] font-mono text-slate-400">Offline</span>
             </div>
           )}
 

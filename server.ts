@@ -168,11 +168,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.get('/api/db-status', (req, res) => {
+app.get('/api/db-status', async (req, res) => {
+  if (!mongoConnected && process.env.MONGODB_URI) {
+    await getMongoDb();
+  }
   res.json({
     type: mongoConnected ? 'mongodb' : 'local_json',
     connected: mongoConnected,
-    databaseName: mongoDb?.databaseName || 'Local File (db.json)',
+    databaseName: mongoDb?.databaseName || (mongoConnected ? 'fysiodanmark' : 'Local File (db.json)'),
     hasMongoUri: Boolean(process.env.MONGODB_URI),
     error: mongoError,
   });
