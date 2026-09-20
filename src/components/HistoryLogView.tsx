@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Calendar,
   Clock,
@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { CompletedSession, Exercise, ExerciseLogEntry } from '../types';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine } from 'recharts';
 
 interface HistoryLogViewProps {
   sessions: CompletedSession[];
@@ -40,11 +41,95 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
   onDeleteSession,
 }) => {
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setViewMode('cards');
+    }
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPlanFilter, setSelectedPlanFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'partial'>('all');
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [selectedExerciseForModal, setSelectedExerciseForModal] = useState<Exercise | null>(null);
+
+  const isScoreEntry = (entry: ExerciseLogEntry) =>
+    entry.trackingMode === 'timed_score' || (entry.scoreResults?.length ?? 0) > 0;
+
+  const formatNumber = (value: number) => Number.isInteger(value) ? String(value) : value.toLocaleString('da-DK', { maximumFractionDigits: 1 });
+
+  const formatScoreSide = (entry: ExerciseLogEntry, side: 'left' | 'right') => {
+    const values = (entry.scoreResults || [])
+      .map((round) => side === 'left' ? round.leftScore : round.rightScore)
+      .filter((value): value is number => typeof value === 'number');
+    if (!values.length) return '—';
+    const unit = entry.scoreUnit || 'point';
+    if (values.length === 1) return `${formatNumber(values[0])} ${unit}`;
+    return `${values.map(formatNumber).join(' · ')} ${unit}`;
+  };
+
+  const renderEntryResults = (entry: ExerciseLogEntry) => {
+    if (isScoreEntry(entry)) {
+      return (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-lg">
+            V: {formatScoreSide(entry, 'left')}
+          </span>
+          <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-lg">
+            H: {formatScoreSide(entry, 'right')}
+          </span>
+          {typeof entry.lsiPercent === 'number' && (
+            <span className="font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-lg">
+              LSI {formatNumber(entry.lsiPercent)}%
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    if (entry.separateLegs) {
+      return (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-lg">
+            V: {entry.leftLegWeightKg ?? 0} kg ({entry.leftLegReps || entry.reps})
+          </span>
+          <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-lg">
+            H: {entry.rightLegWeightKg ?? 0} kg ({entry.rightLegReps || entry.reps})
+          </span>
+        </div>
+      );
+    }
+
+    return (
+      <span>
+        {entry.sets} sæt × {entry.reps} gentagelser
+        {entry.weightKg !== undefined && entry.weightKg > 0 ? ` @ ${entry.weightKg} kg` : ' (kropsvægt)'}
+      </span>
+    );
+  };
+
+  const lsiSessions = useMemo(() => sessions
+    .filter((session) => session.entries.some((entry) => typeof entry.lsiPercent === 'number'))
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()), [sessions]);
+
+  const lsiExercises = useMemo(() => {
+    const seen = new Map<string, string>();
+    lsiSessions.forEach((session) => session.entries.forEach((entry) => {
+      if (typeof entry.lsiPercent === 'number') seen.set(entry.exerciseId, entry.exerciseName);
+    }));
+    return Array.from(seen, ([id, name]) => ({ id, name }));
+  }, [lsiSessions]);
+
+  const lsiChartData = useMemo(() => lsiSessions.map((session) => {
+    const row: Record<string, string | number> = {
+      date: session.date,
+      label: new Date(session.date).toLocaleDateString('da-DK', { day: '2-digit', month: 'short', year: '2-digit' }),
+    };
+    session.entries.forEach((entry) => {
+      if (typeof entry.lsiPercent === 'number') row[entry.exerciseId] = entry.lsiPercent;
+    });
+    return row;
+  }), [lsiSessions]);
 
   // Extract unique plan titles for the filter dropdown
   const uniquePlans = useMemo(() => {
@@ -128,6 +213,18 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
 
   // Extract highlights (highest weight or separate legs)
   const getSessionWeightHighlights = (session: CompletedSession) => {
+    const scoreEntries = session.entries.filter(isScoreEntry);
+    if (scoreEntries.length > 0) {
+      const lsiValues = scoreEntries
+        .map((entry) => entry.lsiPercent)
+        .filter((value): value is number => typeof value === 'number');
+      if (lsiValues.length) {
+        const average = lsiValues.reduce((sum, value) => sum + value, 0) / lsiValues.length;
+        return `${formatNumber(average)}% LSI i snit`;
+      }
+      return `${scoreEntries.length} testresultater`;
+    }
+
     let maxKg = 0;
     let unilateralCount = 0;
     session.entries.forEach((e) => {
@@ -146,7 +243,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Header Card */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div className="absolute top-0 left-0 w-24 h-1 bg-blue-600 rounded-br-full" />
 
         <div className="pt-1">
@@ -216,8 +313,38 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
         </div>
       </div>
 
+      {lsiChartData.length > 1 && lsiExercises.length > 0 && (
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2 mb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-blue-600" />
+                <h3 className="font-bold text-slate-900 text-sm sm:text-base">LSI-udvikling samlet</h3>
+              </div>
+              <p className="text-[11px] sm:text-xs text-slate-500 mt-1">Alle LSI-tests i samme graf, så udviklingen mellem testdatoerne kan sammenlignes.</p>
+            </div>
+            <span className="text-[10px] font-bold text-slate-500 bg-slate-100 rounded-full px-2.5 py-1 self-start sm:self-auto">90% reference</span>
+          </div>
+          <div className="h-[260px] sm:h-[330px] -ml-3 sm:ml-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={lsiChartData} margin={{ top: 8, right: 10, left: -15, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 10 }} minTickGap={14} />
+                <YAxis domain={[0, 110]} tick={{ fontSize: 10 }} width={34} unit="%" />
+                <Tooltip formatter={(value: any, name: any) => [`${value}%`, lsiExercises.find((e) => e.id === name)?.name || name]} labelFormatter={(label) => `Test: ${label}`} />
+                <Legend formatter={(value) => <span className="text-[10px] sm:text-xs">{lsiExercises.find((e) => e.id === value)?.name || value}</span>} />
+                <ReferenceLine y={90} strokeDasharray="5 5" />
+                {lsiExercises.map((exercise, index) => (
+                  <Line key={exercise.id} type="monotone" dataKey={exercise.id} name={exercise.id} stroke={`hsl(${210 + index * 45} 70% 45%)`} strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 5 }} connectNulls />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
       {/* Filter & Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+      <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5">
         {/* Search input */}
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -289,7 +416,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
                     <th className="py-3.5 px-3">Status</th>
                     <th className="py-3.5 px-4">Udførte øvelser</th>
                     <th className="py-3.5 px-3">Varighed</th>
-                    <th className="py-3.5 px-4">Belastning</th>
+                    <th className="py-3.5 px-4">Resultat / Belastning</th>
                     <th className="py-3.5 px-4 text-right">Handling</th>
                   </tr>
                 </thead>
@@ -500,24 +627,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
                                           </div>
 
                                           <div className="flex flex-wrap items-center gap-2 text-slate-600 mt-1.5">
-                                            {entry.separateLegs ? (
-                                              <div className="flex items-center gap-1.5">
-                                                <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                                                  V: {entry.leftLegWeightKg ?? 0} kg ({entry.leftLegReps || entry.reps})
-                                                </span>
-                                                <span>•</span>
-                                                <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                                                  H: {entry.rightLegWeightKg ?? 0} kg ({entry.rightLegReps || entry.reps})
-                                                </span>
-                                              </div>
-                                            ) : (
-                                              <span>
-                                                {entry.sets} sæt × {entry.reps} gentagelser
-                                                {entry.weightKg !== undefined && entry.weightKg > 0
-                                                  ? ` @ ${entry.weightKg} kg`
-                                                  : ' (kropsvægt)'}
-                                              </span>
-                                            )}
+{renderEntryResults(entry)}
 
                                             {entry.durationSeconds ? (
                                               <span className="text-slate-400 font-mono text-[11px]">
@@ -566,7 +676,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
                 >
                   <div
                     onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
-                    className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-slate-50/70 transition-colors"
+                    className="p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 cursor-pointer hover:bg-slate-50/70 transition-colors"
                   >
                     <div className="flex items-start sm:items-center gap-3.5">
                       <div
@@ -645,7 +755,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
 
                   {/* Expanded exercise entries */}
                   {isExpanded && (
-                    <div className="p-5 pt-0 border-t border-slate-100 bg-slate-50/50 space-y-3">
+                    <div className="p-3.5 sm:p-5 pt-0 border-t border-slate-100 bg-slate-50/50 space-y-3">
                       <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pt-3 pb-1">
                         Registrerede øvelser i dette pas:
                       </div>
@@ -662,24 +772,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
                               <div>
                                 <h5 className="font-bold text-slate-900 text-sm">{entry.exerciseName}</h5>
                                 <div className="flex flex-wrap items-center gap-2 text-slate-600 mt-1">
-                                  {entry.separateLegs ? (
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                                        V: {entry.leftLegWeightKg ?? 0} kg ({entry.leftLegReps || entry.reps} reps)
-                                      </span>
-                                      <span>•</span>
-                                      <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                                        H: {entry.rightLegWeightKg ?? 0} kg ({entry.rightLegReps || entry.reps} reps)
-                                      </span>
-                                    </div>
-                                  ) : (
-                                    <span>
-                                      {entry.sets} sæt × {entry.reps} gentagelser
-                                      {entry.weightKg !== undefined && entry.weightKg > 0
-                                        ? ` @ ${entry.weightKg} kg`
-                                        : ' (kropsvægt)'}
-                                    </span>
-                                  )}
+{renderEntryResults(entry)}
 
                                   {entry.durationSeconds ? (
                                     <span className="text-slate-500">
