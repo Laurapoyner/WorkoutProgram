@@ -190,8 +190,8 @@ export default function App() {
         if (loadedSessions) setSessions(loadedSessions);
       } else {
         setDbStatus((prev) => ({
-          type: prev?.type || 'local_json',
-          databaseName: prev?.databaseName || 'Local File',
+          type: 'mongodb',
+          databaseName: prev?.databaseName || 'workout_program',
           hasMongoUri: prev?.hasMongoUri ?? true,
           connected: false,
           error: data.error,
@@ -214,27 +214,30 @@ export default function App() {
 
   // Handlers for plans
   const handleSavePlan = async (plan: WorkoutPlan) => {
-    const existingIndex = plans.findIndex((p) => p.id === plan.id);
-    let updatedPlans: WorkoutPlan[];
-    if (existingIndex >= 0) {
-      updatedPlans = [...plans];
-      updatedPlans[existingIndex] = plan;
-    } else {
-      updatedPlans = [...plans, plan];
+    try {
+      await StorageService.savePlan(plan);
+      const existingIndex = plans.findIndex((p) => p.id === plan.id);
+      const updatedPlans = [...plans];
+      if (existingIndex >= 0) updatedPlans[existingIndex] = plan;
+      else updatedPlans.push(plan);
+      setPlans(updatedPlans);
+      showToast(`Træningsplanen "${plan.title}" blev gemt i MongoDB!`);
+    } catch (err: any) {
+      showToast(`Planen blev ikke gemt: ${err.message || 'databasefejl'}`);
+      throw err;
     }
-    setPlans(updatedPlans);
-    await StorageService.savePlan(plan);
-    showToast(`Træningsplanen "${plan.title}" blev gemt!`);
   };
 
   const handleDeletePlan = async (planId: string) => {
-    const updated = plans.filter((p) => p.id !== planId);
-    setPlans(updated);
-    if (activePlanId === planId && updated.length > 0) {
-      setActivePlanId(updated[0].id);
+    try {
+      await StorageService.deletePlan(planId);
+      const updated = plans.filter((p) => p.id !== planId);
+      setPlans(updated);
+      if (activePlanId === planId && updated.length > 0) setActivePlanId(updated[0].id);
+      showToast('Træningsplan slettet fra MongoDB');
+    } catch (err: any) {
+      showToast(`Planen blev ikke slettet: ${err.message || 'databasefejl'}`);
     }
-    await StorageService.deletePlan(planId);
-    showToast('Træningsplan slettet');
   };
 
   // Handlers for exercises
@@ -251,11 +254,7 @@ export default function App() {
         updatedExercises = [savedEx, ...exercises];
       }
       setExercises(updatedExercises);
-      if (res?.mode === 'mongodb' || dbStatus?.connected) {
-        showToast(`Øvelsen "${savedEx.name}" blev gemt i MongoDB Atlas!`);
-      } else {
-        showToast(`Øvelsen "${savedEx.name}" blev gemt lokalt.`);
-      }
+      showToast(`Øvelsen "${savedEx.name}" blev gemt i MongoDB Atlas!`);
     } catch (err: any) {
       console.error('Fejl ved gemning af øvelse:', err);
       showToast(`Fejl ved gemning i databasen: ${err.message || 'Ukendt fejl'}`);
@@ -275,15 +274,20 @@ export default function App() {
 
   // Handler when a workout is completed and saved
   const handleCompleteWorkout = async (session: CompletedSession) => {
-    setSessions((prev) => [session, ...prev]);
-    setLogs((prev) => [...session.entries, ...prev]);
-    await StorageService.addCompletedSession(session);
-    showToast(
-      session.isPartial
-        ? `Delvist pas gemt (${session.exercisesCompletedCount} øvelser). Du kan genoptage det når som helst fra tabellen!`
-        : `Flot klaret! Dagens pas blev gemt med ${session.exercisesCompletedCount} øvelser i databasen.`
-    );
-    setActiveTab('history');
+    try {
+      await StorageService.addCompletedSession(session);
+      setSessions((prev) => [session, ...prev]);
+      setLogs((prev) => [...session.entries, ...prev]);
+      showToast(
+        session.isPartial
+          ? `Delvist pas gemt (${session.exercisesCompletedCount} øvelser). Du kan genoptage det når som helst fra tabellen!`
+          : `Flot klaret! Dagens pas blev gemt med ${session.exercisesCompletedCount} øvelser i databasen.`
+      );
+      setActiveTab('history');
+    } catch (err: any) {
+      showToast(`Træningspasset blev ikke gemt: ${err.message || 'databasefejl'}`);
+      throw err;
+    }
   };
 
   const handleResumeSession = (session: CompletedSession) => {
@@ -296,9 +300,13 @@ export default function App() {
   };
 
   const handleDeleteSession = async (sessionId: string) => {
-    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-    await StorageService.deleteCompletedSession(sessionId);
-    showToast('Træningspasset blev slettet');
+    try {
+      await StorageService.deleteCompletedSession(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      showToast('Træningspasset blev slettet fra MongoDB');
+    } catch (err: any) {
+      showToast(`Træningspasset blev ikke slettet: ${err.message || 'databasefejl'}`);
+    }
   };
 
   const handleResetToDefaults = async () => {

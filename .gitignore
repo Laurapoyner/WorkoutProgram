@@ -9,3 +9,5 @@ coverage/
 bun.lock
 bun.lockb
 package-lock.json
+
+data/

@@ -1,107 +1,60 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { MongoClient, Db } from 'mongodb';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { MongoClient, Db, ServerApiVersion } from 'mongodb';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const DB_NAME = process.env.MONGODB_DB_NAME || 'workout_program';
 
-// Support high payload limit for photo and image uploads
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Persistent Data Directory (Local file fallback)
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
-const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-
-// Serve uploaded images statically
-app.use('/api/uploads', express.static(UPLOADS_DIR));
-
-// MongoDB Client & State
 let mongoClient: MongoClient | null = null;
 let mongoDb: Db | null = null;
-let mongoConnected = false;
 let mongoError: string | null = null;
-let connectingPromise: Promise<boolean> | null = null;
+let connectingPromise: Promise<Db> | null = null;
 
-async function connectToMongo(uri?: string): Promise<boolean> {
-  const targetUri = uri || process.env.MONGODB_URI;
-  if (!targetUri) {
-    mongoConnected = false;
-    mongoError = 'No MONGODB_URI configured';
-    return false;
-  }
+function publicMongoError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/authentication failed|bad auth/i.test(msg)) return 'MongoDB-login fejlede. Tjek databasebruger og adgangskode.';
+  if (/ENOTFOUND|querySrv|DNS/i.test(msg)) return 'MongoDB-adressen kunne ikke findes. Tjek connection string.';
+  if (/timed out|server selection/i.test(msg)) return 'MongoDB kunne ikke nås. Tjek Atlas Network Access og connection string.';
+  return msg || 'Ukendt MongoDB-fejl';
+}
 
-  if (connectingPromise) {
-    return connectingPromise;
+async function getMongoDb(): Promise<Db> {
+  if (mongoDb) return mongoDb;
+  if (connectingPromise) return connectingPromise;
+
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    mongoError = 'MONGODB_URI mangler på serveren';
+    throw new Error(mongoError);
   }
 
   connectingPromise = (async () => {
     try {
-      console.log('[MongoDB] Connecting to MongoDB...');
-      if (mongoClient) {
-        try {
-          await mongoClient.close();
-        } catch {}
-      }
-      mongoClient = new MongoClient(targetUri, {
+      mongoClient = new MongoClient(uri, {
+        serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
         connectTimeoutMS: 10000,
         serverSelectionTimeoutMS: 10000,
       });
       await mongoClient.connect();
-      const dbName = process.env.MONGODB_DB_NAME || 'fysiodanmark';
-      mongoDb = mongoClient.db(dbName);
-      mongoConnected = true;
+      await mongoClient.db('admin').command({ ping: 1 });
+      mongoDb = mongoClient.db(DB_NAME);
       mongoError = null;
-      console.log(`[MongoDB] Successfully connected to database: ${mongoDb.databaseName}`);
-
-      // Check if MongoDB collections are empty, and seed from local db.json if needed
-      try {
-        const exerciseCount = await mongoDb.collection('exercises').countDocuments();
-        if (exerciseCount === 0) {
-          console.log('[MongoDB] Initializing collections with local starter data...');
-          const local = readLocalDB();
-          if (local.exercises && local.exercises.length > 0) {
-            await mongoDb.collection('exercises').insertMany(local.exercises);
-          }
-          if (local.plans && local.plans.length > 0) {
-            await mongoDb.collection('plans').insertMany(local.plans);
-          }
-          if (local.logs && local.logs.length > 0) {
-            await mongoDb.collection('logs').insertMany(local.logs);
-          }
-          console.log('[MongoDB] Starter data seeded successfully!');
-        }
-      } catch (seedErr) {
-        console.warn('[MongoDB] Seeding check error:', seedErr);
-      }
-      return true;
-    } catch (err: any) {
-      mongoConnected = false;
-      const errStr = `${err?.message || ''} ${err?.cause?.message || ''} ${String(err)}`;
-      if (errStr.includes('tlsv1 alert internal error') || errStr.includes('SSL alert number 80')) {
-        mongoError = 'IP_NOT_WHITELISTED';
-      } else {
-        mongoError = err.message || 'Connection failed';
-      }
-      console.warn('[MongoDB] Connection error, using local fallback:', err.message);
-      return false;
+      console.log(`[MongoDB] Connected to ${mongoDb.databaseName}`);
+      return mongoDb;
+    } catch (err) {
+      mongoError = publicMongoError(err);
+      mongoDb = null;
+      if (mongoClient) await mongoClient.close().catch(() => {});
+      mongoClient = null;
+      throw err;
     } finally {
       connectingPromise = null;
     }
@@ -110,674 +63,271 @@ async function connectToMongo(uri?: string): Promise<boolean> {
   return connectingPromise;
 }
 
-// Helper to get active MongoDB instance, attempting connection if necessary
-async function getMongoDb(): Promise<Db | null> {
-  if (mongoDb && mongoConnected) {
-    return mongoDb;
-  }
-  if (process.env.MONGODB_URI) {
-    const ok = await connectToMongo(process.env.MONGODB_URI);
-    if (ok && mongoDb) return mongoDb;
-  }
-  return null;
-}
-
-// Initialize MongoDB if MONGODB_URI is provided
-const MONGODB_URI = process.env.MONGODB_URI;
-if (MONGODB_URI) {
-  connectToMongo(MONGODB_URI);
-} else {
-  console.log('[Database] No MONGODB_URI provided. Running on persistent local storage (data/db.json).');
-}
-
-interface DBData {
-  exercises: any[];
-  plans: any[];
-  logs: any[];
-  sessions: any[];
-  draft?: any;
-}
-
-function readLocalDB(): DBData {
+async function requireDb(req: Request, res: Response, next: NextFunction) {
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const content = fs.readFileSync(DB_FILE, 'utf-8');
-      return JSON.parse(content);
-    }
+    res.locals.db = await getMongoDb();
+    next();
   } catch (err) {
-    console.error('Error reading db.json, returning empty defaults', err);
-  }
-  return { exercises: [], plans: [], logs: [], sessions: [], draft: null };
-}
-
-function writeLocalDB(data: DBData): void {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing db.json', err);
-  }
-}
-
-// API Routes
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    database: mongoConnected ? 'mongodb' : 'local_json',
-    mongoConnected,
-    serverTime: new Date().toISOString(),
-  });
-});
-
-app.get('/api/db-status', async (req, res) => {
-  if (!mongoConnected && process.env.MONGODB_URI) {
-    await getMongoDb();
-  }
-  res.json({
-    type: mongoConnected ? 'mongodb' : 'local_json',
-    connected: mongoConnected,
-    databaseName: mongoDb?.databaseName || (mongoConnected ? 'fysiodanmark' : 'Local File (db.json)'),
-    hasMongoUri: Boolean(process.env.MONGODB_URI),
-    error: mongoError,
-  });
-});
-
-app.post('/api/db-retry', async (req, res) => {
-  const uri = process.env.MONGODB_URI;
-  if (!uri) {
-    return res.status(400).json({ success: false, error: 'No MONGODB_URI configured' });
-  }
-  await connectToMongo(uri);
-  res.json({
-    success: mongoConnected,
-    connected: mongoConnected,
-    databaseName: mongoDb?.databaseName || 'Local File (db.json)',
-    error: mongoError,
-  });
-});
-
-// Seed / check initial data
-app.get('/api/db-state', async (req, res) => {
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const [exercises, plans, logs, sessions] = await Promise.all([
-        db.collection('exercises').find({}, { projection: { _id: 0 } }).toArray(),
-        db.collection('plans').find({}, { projection: { _id: 0 } }).toArray(),
-        db.collection('logs').find({}, { projection: { _id: 0 } }).toArray(),
-        db.collection('sessions').find({}, { projection: { _id: 0 } }).toArray(),
-      ]);
-      return res.json({ exercises, plans, logs, sessions });
-    } catch (err) {
-      console.warn('MongoDB read error, falling back to local file', err);
-    }
-  }
-
-  const local = readLocalDB();
-  res.json(local);
-});
-
-// Initial bulk seed or sync
-app.post('/api/sync', async (req, res) => {
-  const { exercises, plans, logs, sessions } = req.body;
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      if (exercises && exercises.length > 0) {
-        for (const ex of exercises) {
-          const { _id, ...cleanEx } = ex;
-          await db.collection('exercises').updateOne({ id: cleanEx.id }, { $set: cleanEx }, { upsert: true });
-        }
-      }
-      if (plans && plans.length > 0) {
-        for (const plan of plans) {
-          const { _id, ...cleanPlan } = plan;
-          await db.collection('plans').updateOne({ id: cleanPlan.id }, { $set: cleanPlan }, { upsert: true });
-        }
-      }
-      if (logs && logs.length > 0) {
-        for (const log of logs) {
-          const { _id, ...cleanLog } = log;
-          await db.collection('logs').updateOne({ id: cleanLog.id }, { $set: cleanLog }, { upsert: true });
-        }
-      }
-      if (sessions && sessions.length > 0) {
-        for (const sess of sessions) {
-          const { _id, ...cleanSess } = sess;
-          await db.collection('sessions').updateOne({ id: cleanSess.id }, { $set: cleanSess }, { upsert: true });
-        }
-      }
-      return res.json({ success: true, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB sync error, falling back to local file', err);
-    }
-  }
-
-  const current = readLocalDB();
-  const merged: DBData = {
-    exercises: exercises && exercises.length > 0 ? exercises : current.exercises,
-    plans: plans && plans.length > 0 ? plans : current.plans,
-    logs: logs || current.logs,
-    sessions: sessions || current.sessions,
-  };
-
-  writeLocalDB(merged);
-  res.json({ success: true, db: merged, mode: 'local' });
-});
-
-// Exercises
-app.get('/api/exercises', async (req, res) => {
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const exercises = await db.collection('exercises').find({}, { projection: { _id: 0 } }).toArray();
-      try {
-        const local = readLocalDB();
-        local.exercises = exercises;
-        writeLocalDB(local);
-      } catch {}
-      return res.json(exercises);
-    } catch (err: any) {
-      console.warn('[MongoDB] Error fetching exercises:', err.message);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  res.json(dbLocal.exercises || []);
-});
-
-app.post('/api/exercises', async (req, res) => {
-  const exercise = req.body;
-  if (!exercise || !exercise.id) {
-    return res.status(400).json({ error: 'Exercise and id are required' });
-  }
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const { _id, ...cleanExercise } = exercise;
-      await db.collection('exercises').updateOne(
-        { id: cleanExercise.id },
-        { $set: cleanExercise },
-        { upsert: true }
-      );
-
-      // Also mirror to local db.json for offline resilience
-      try {
-        const local = readLocalDB();
-        const existingIdx = local.exercises.findIndex((e: any) => e.id === cleanExercise.id);
-        if (existingIdx >= 0) {
-          local.exercises[existingIdx] = cleanExercise;
-        } else {
-          local.exercises.unshift(cleanExercise);
-        }
-        writeLocalDB(local);
-      } catch (mirrorErr) {
-        console.warn('Local mirror write error:', mirrorErr);
-      }
-
-      console.log(`[MongoDB] Successfully persisted exercise in Atlas: ${cleanExercise.name} (${cleanExercise.id})`);
-      return res.json({ success: true, exercise: cleanExercise, mode: 'mongodb' });
-    } catch (err: any) {
-      console.error('[MongoDB] Error saving exercise to Atlas:', err);
-      return res.status(500).json({ error: 'Kunne ikke gemme øvelsen i MongoDB Atlas: ' + err.message });
-    }
-  }
-
-  // If MONGODB_URI is provided but not connected, return clear error
-  if (process.env.MONGODB_URI) {
-    return res.status(503).json({
-      error: 'MongoDB Atlas er ikke forbundet (' + (mongoError || 'forbindelsesfejl') + ')',
+    res.status(503).json({
+      error: `Den fælles MongoDB-database er ikke tilgængelig: ${publicMongoError(err)}`,
+      code: 'DATABASE_UNAVAILABLE',
     });
   }
+}
 
-  const local = readLocalDB();
-  const existingIdx = local.exercises.findIndex((e: any) => e.id === exercise.id);
-  if (existingIdx >= 0) {
-    local.exercises[existingIdx] = exercise;
-  } else {
-    local.exercises.unshift(exercise);
-  }
-  writeLocalDB(local);
-  res.json({ success: true, exercise, mode: 'local' });
-});
+function clean<T extends Record<string, any>>(value: T): T {
+  const { _id, ...rest } = value;
+  return rest as T;
+}
 
-app.delete('/api/exercises/:id', async (req, res) => {
-  const { id } = req.params;
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      await db.collection('exercises').deleteOne({ id });
-      try {
-        const local = readLocalDB();
-        local.exercises = local.exercises.filter((e: any) => e.id !== id);
-        writeLocalDB(local);
-      } catch {}
-      console.log(`[MongoDB] Deleted exercise from Atlas: ${id}`);
-      return res.json({ success: true, id, mode: 'mongodb' });
-    } catch (err: any) {
-      console.error('[MongoDB] Error deleting exercise from Atlas:', err);
-      return res.status(500).json({ error: 'Kunne ikke slette øvelse fra MongoDB Atlas: ' + err.message });
-    }
-  }
-
-  const local = readLocalDB();
-  local.exercises = local.exercises.filter((e: any) => e.id !== id);
-  writeLocalDB(local);
-  res.json({ success: true, id, mode: 'local' });
-});
-
-// Plans
-app.get('/api/plans', async (req, res) => {
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const plans = await db.collection('plans').find({}, { projection: { _id: 0 } }).toArray();
-      return res.json(plans);
-    } catch (err) {
-      console.warn('MongoDB error fetching plans', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  res.json(dbLocal.plans || []);
-});
-
-app.post('/api/plans', async (req, res) => {
-  const plan = req.body;
-  if (!plan || !plan.id) {
-    return res.status(400).json({ error: 'Plan and id are required' });
-  }
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const { _id, ...cleanPlan } = plan;
-      await db.collection('plans').updateOne({ id: cleanPlan.id }, { $set: cleanPlan }, { upsert: true });
-      return res.json({ success: true, plan: cleanPlan, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB error saving plan', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  const existingIdx = dbLocal.plans.findIndex((p: any) => p.id === plan.id);
-  if (existingIdx >= 0) {
-    dbLocal.plans[existingIdx] = plan;
-  } else {
-    dbLocal.plans.push(plan);
-  }
-  writeLocalDB(dbLocal);
-  res.json({ success: true, plan, mode: 'local' });
-});
-
-app.delete('/api/plans/:id', async (req, res) => {
-  const { id } = req.params;
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      await db.collection('plans').deleteOne({ id });
-      return res.json({ success: true, id, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB error deleting plan', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  dbLocal.plans = dbLocal.plans.filter((p: any) => p.id !== id);
-  writeLocalDB(dbLocal);
-  res.json({ success: true, id, mode: 'local' });
-});
-
-// Logs
-app.get('/api/logs', async (req, res) => {
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const logs = await db.collection('logs').find({}, { projection: { _id: 0 } }).sort({ timestamp: -1 }).toArray();
-      return res.json(logs);
-    } catch (err) {
-      console.warn('MongoDB error fetching logs', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  res.json(dbLocal.logs || []);
-});
-
-app.post('/api/logs', async (req, res) => {
-  const entry = req.body;
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const { _id, ...cleanEntry } = entry;
-      await db.collection('logs').updateOne({ id: cleanEntry.id }, { $set: cleanEntry }, { upsert: true });
-      return res.json({ success: true, entry: cleanEntry, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB error saving log', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  dbLocal.logs.unshift(entry);
-  writeLocalDB(dbLocal);
-  res.json({ success: true, entry, mode: 'local' });
-});
-
-// Sessions
-app.get('/api/sessions', async (req, res) => {
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const sessions = await db.collection('sessions').find({}, { projection: { _id: 0 } }).sort({ completedAt: -1 }).toArray();
-      return res.json(sessions);
-    } catch (err) {
-      console.warn('MongoDB error fetching sessions', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  res.json(dbLocal.sessions || []);
-});
-
-app.post('/api/sessions', async (req, res) => {
-  const session = req.body;
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const { _id, ...cleanSession } = session;
-      await db.collection('sessions').updateOne({ id: cleanSession.id }, { $set: cleanSession }, { upsert: true });
-      if (cleanSession.entries && Array.isArray(cleanSession.entries)) {
-        for (const entry of cleanSession.entries) {
-          const { _id: entryId, ...cleanEntry } = entry;
-          await db.collection('logs').updateOne({ id: cleanEntry.id }, { $set: cleanEntry }, { upsert: true });
-        }
-      }
-      return res.json({ success: true, session: cleanSession, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB error saving session', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  dbLocal.sessions.unshift(session);
-  if (session.entries && Array.isArray(session.entries)) {
-    dbLocal.logs.unshift(...session.entries);
-  }
-  writeLocalDB(dbLocal);
-  res.json({ success: true, session, mode: 'local' });
-});
-
-app.delete('/api/sessions/:id', async (req, res) => {
-  const { id } = req.params;
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      await db.collection('sessions').deleteOne({ id });
-      return res.json({ success: true, id, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB error deleting session', err);
-    }
-  }
-
-  const dbLocal = readLocalDB();
-  dbLocal.sessions = (dbLocal.sessions || []).filter((s: any) => s.id !== id);
-  writeLocalDB(dbLocal);
-  res.json({ success: true, id, mode: 'local' });
-});
-
-// Active workout draft endpoints (allows resuming unfinished workouts)
-app.get('/api/active-draft', async (req, res) => {
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const draft = await db.collection('drafts').findOne({ type: 'active_workout' }, { projection: { _id: 0 } });
-      if (draft) {
-        return res.json({ draft: draft.data });
-      }
-    } catch (err) {
-      console.warn('MongoDB error fetching active draft', err);
-    }
-  }
-
-  const local = readLocalDB();
-  res.json({ draft: local.draft || null });
-});
-
-app.post('/api/active-draft', async (req, res) => {
-  const { draft } = req.body;
-
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      if (draft) {
-        await db.collection('drafts').updateOne(
-          { type: 'active_workout' },
-          { $set: { type: 'active_workout', data: draft, updatedAt: new Date().toISOString() } },
-          { upsert: true }
-        );
-      } else {
-        await db.collection('drafts').deleteOne({ type: 'active_workout' });
-      }
-      return res.json({ success: true, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB error saving draft', err);
-    }
-  }
-
-  const local = readLocalDB();
-  local.draft = draft || null;
-  writeLocalDB(local);
-  res.json({ success: true, mode: 'local' });
-});
-
-app.delete('/api/active-draft', async (req, res) => {
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      await db.collection('drafts').deleteOne({ type: 'active_workout' });
-      return res.json({ success: true, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB error deleting draft', err);
-    }
-  }
-
-  const local = readLocalDB();
-  local.draft = null;
-  writeLocalDB(local);
-  res.json({ success: true, mode: 'local' });
-});
-
-// Direct Image Upload Endpoint - stores directly in MongoDB Atlas and caches locally
-app.post('/api/upload-image', async (req, res) => {
+app.get('/api/health', async (_req, res) => {
   try {
-    const { imageBase64, filename } = req.body;
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'No image provided' });
-    }
-
-    // If it's a data URL, decode buffer
-    const matches = imageBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-    if (matches && matches.length === 3) {
-      const mimeType = matches[1];
-      const buffer = Buffer.from(matches[2], 'base64');
-      const ext = mimeType.split('/')[1]?.split('+')[0] || 'jpg';
-      const imageId = `img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const cleanFilename = filename ? `${Date.now()}_${path.basename(filename)}` : `${imageId}.${ext}`;
-
-      // 1. Save directly into MongoDB Atlas 'images' collection
-      let savedToMongo = false;
-      const db = await getMongoDb();
-      if (db) {
-        try {
-          await db.collection('images').updateOne(
-            { id: imageId },
-            {
-              $set: {
-                id: imageId,
-                filename: cleanFilename,
-                mimeType,
-                data: buffer,
-                size: buffer.length,
-                createdAt: new Date().toISOString(),
-              },
-            },
-            { upsert: true }
-          );
-          savedToMongo = true;
-          console.log(`[MongoDB] Image permanently saved to MongoDB Atlas: ${cleanFilename} (${buffer.length} bytes)`);
-        } catch (mongoImgErr: any) {
-          console.error('[MongoDB] Failed to store image in Atlas:', mongoImgErr.message);
-        }
-      }
-
-      // 2. Also cache to local filesystem
-      try {
-        const filePath = path.join(UPLOADS_DIR, cleanFilename);
-        fs.writeFileSync(filePath, buffer);
-      } catch (fsErr) {}
-
-      const publicUrl = `/api/images/${imageId}`;
-      return res.json({
-        success: true,
-        url: publicUrl,
-        imageId,
-        mode: savedToMongo ? 'mongodb' : 'local',
-      });
-    }
-
-    // If already an HTTP/HTTPS URL
-    return res.json({ success: true, url: imageBase64, mode: 'direct_url' });
-  } catch (err: any) {
-    console.error('Image upload failed:', err);
-    res.status(500).json({ error: 'Upload failed: ' + err.message });
+    const db = await getMongoDb();
+    res.json({ status: 'ok', database: 'mongodb', connected: true, databaseName: db.databaseName, serverTime: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ status: 'error', database: 'mongodb', connected: false, error: publicMongoError(err), serverTime: new Date().toISOString() });
   }
 });
 
-// Direct Image Retrieval Endpoint - streams image binary directly from MongoDB Atlas or local disk
-app.get('/api/images/:id', async (req, res) => {
-  const { id } = req.params;
-
-  // 1. Try MongoDB first
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const doc = await db.collection('images').findOne({ id });
-      if (doc && doc.data) {
-        const imgBuffer = Buffer.isBuffer(doc.data)
-          ? doc.data
-          : (doc.data.buffer ? Buffer.from(doc.data.buffer) : Buffer.from(doc.data));
-        res.set({
-          'Content-Type': doc.mimeType || 'image/jpeg',
-          'Content-Length': String(imgBuffer.length),
-          'Cache-Control': 'public, max-age=31536000, immutable',
-        });
-        return res.send(imgBuffer);
-      }
-    } catch (mongoErr: any) {
-      console.warn('[MongoDB] Error reading image from Atlas:', mongoErr.message);
-    }
-  }
-
-  // 2. Try local disk fallback
+app.get('/api/db-status', async (_req, res) => {
   try {
-    if (fs.existsSync(UPLOADS_DIR)) {
-      const files = fs.readdirSync(UPLOADS_DIR);
-      const matching = files.find((f) => f.includes(id));
-      if (matching) {
-        return res.sendFile(path.join(UPLOADS_DIR, matching));
-      }
-    }
-  } catch (fsErr) {}
-
-  res.status(404).send('Billede ikke fundet');
+    const db = await getMongoDb();
+    res.json({ type: 'mongodb', connected: true, databaseName: db.databaseName, hasMongoUri: Boolean(process.env.MONGODB_URI), error: null });
+  } catch (err) {
+    res.json({ type: 'mongodb', connected: false, databaseName: DB_NAME, hasMongoUri: Boolean(process.env.MONGODB_URI), error: publicMongoError(err) });
+  }
 });
 
-// Fallback for /api/uploads/:filename to also check MongoDB
-app.get('/api/uploads/:filename', async (req, res) => {
-  const { filename } = req.params;
-  const filePath = path.join(UPLOADS_DIR, filename);
-  if (fs.existsSync(filePath)) {
-    return res.sendFile(filePath);
+app.post('/api/db-retry', async (_req, res) => {
+  if (mongoClient) await mongoClient.close().catch(() => {});
+  mongoClient = null;
+  mongoDb = null;
+  try {
+    const db = await getMongoDb();
+    res.json({ success: true, connected: true, databaseName: db.databaseName, error: null });
+  } catch (err) {
+    res.status(503).json({ success: false, connected: false, databaseName: DB_NAME, error: publicMongoError(err) });
   }
-
-  // If not on disk, search MongoDB
-  const db = await getMongoDb();
-  if (db) {
-    try {
-      const doc = await db.collection('images').findOne({
-        $or: [{ filename }, { id: filename.replace(/\.[^/.]+$/, '') }],
-      });
-      if (doc && doc.data) {
-        const imgBuffer = Buffer.isBuffer(doc.data)
-          ? doc.data
-          : (doc.data.buffer ? Buffer.from(doc.data.buffer) : Buffer.from(doc.data));
-        res.set({
-          'Content-Type': doc.mimeType || 'image/jpeg',
-          'Content-Length': String(imgBuffer.length),
-          'Cache-Control': 'public, max-age=31536000, immutable',
-        });
-        return res.send(imgBuffer);
-      }
-    } catch (e) {}
-  }
-
-  res.status(404).send('Billede ikke fundet');
 });
 
-// Reset endpoint
-app.post('/api/reset', async (req, res) => {
-  const { exercises, plans, logs } = req.body;
+app.get('/api/db-state', requireDb, async (_req, res) => {
+  const db: Db = res.locals.db;
+  const [exercises, plans, logs, sessions] = await Promise.all([
+    db.collection('exercises').find({}, { projection: { _id: 0 } }).toArray(),
+    db.collection('plans').find({}, { projection: { _id: 0 } }).toArray(),
+    db.collection('logs').find({}, { projection: { _id: 0 } }).sort({ timestamp: -1 }).toArray(),
+    db.collection('sessions').find({}, { projection: { _id: 0 } }).sort({ completedAt: -1 }).toArray(),
+  ]);
+  res.json({ exercises, plans, logs, sessions });
+});
 
-  if (mongoConnected && mongoDb) {
-    try {
-      await Promise.all([
-        mongoDb.collection('exercises').deleteMany({}),
-        mongoDb.collection('plans').deleteMany({}),
-        mongoDb.collection('logs').deleteMany({}),
-        mongoDb.collection('sessions').deleteMany({}),
-      ]);
-      if (exercises && exercises.length) await mongoDb.collection('exercises').insertMany(exercises);
-      if (plans && plans.length) await mongoDb.collection('plans').insertMany(plans);
-      if (logs && logs.length) await mongoDb.collection('logs').insertMany(logs);
-      return res.json({ success: true, mode: 'mongodb' });
-    } catch (err) {
-      console.warn('MongoDB reset error', err);
+app.post('/api/sync', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  const { exercises = [], plans = [], logs = [], sessions = [] } = req.body || {};
+  const upsertAll = async (collection: string, items: any[]) => {
+    for (const item of items) {
+      if (!item?.id) continue;
+      const doc = clean(item);
+      await db.collection(collection).updateOne({ id: doc.id }, { $set: doc }, { upsert: true });
     }
-  }
-
-  const resetDb: DBData = {
-    exercises: exercises || [],
-    plans: plans || [],
-    logs: logs || [],
-    sessions: [],
   };
-  writeLocalDB(resetDb);
-  res.json({ success: true, db: resetDb, mode: 'local' });
+  await Promise.all([
+    upsertAll('exercises', exercises),
+    upsertAll('plans', plans),
+    upsertAll('logs', logs),
+    upsertAll('sessions', sessions),
+  ]);
+  res.json({ success: true, mode: 'mongodb' });
+});
+
+app.get('/api/exercises', requireDb, async (_req, res) => {
+  const db: Db = res.locals.db;
+  res.json(await db.collection('exercises').find({}, { projection: { _id: 0 } }).toArray());
+});
+
+app.post('/api/exercises', requireDb, async (req, res) => {
+  if (!req.body?.id) return res.status(400).json({ error: 'Exercise and id are required' });
+  const db: Db = res.locals.db;
+  const exercise = clean(req.body);
+  await db.collection('exercises').updateOne({ id: exercise.id }, { $set: exercise }, { upsert: true });
+  res.json({ success: true, exercise, mode: 'mongodb' });
+});
+
+app.delete('/api/exercises/:id', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  await db.collection('exercises').deleteOne({ id: req.params.id });
+  res.json({ success: true, id: req.params.id, mode: 'mongodb' });
+});
+
+app.get('/api/plans', requireDb, async (_req, res) => {
+  const db: Db = res.locals.db;
+  res.json(await db.collection('plans').find({}, { projection: { _id: 0 } }).toArray());
+});
+
+app.post('/api/plans', requireDb, async (req, res) => {
+  if (!req.body?.id) return res.status(400).json({ error: 'Plan and id are required' });
+  const db: Db = res.locals.db;
+  const plan = clean(req.body);
+  await db.collection('plans').updateOne({ id: plan.id }, { $set: plan }, { upsert: true });
+  res.json({ success: true, plan, mode: 'mongodb' });
+});
+
+app.delete('/api/plans/:id', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  await db.collection('plans').deleteOne({ id: req.params.id });
+  res.json({ success: true, id: req.params.id, mode: 'mongodb' });
+});
+
+app.get('/api/logs', requireDb, async (_req, res) => {
+  const db: Db = res.locals.db;
+  res.json(await db.collection('logs').find({}, { projection: { _id: 0 } }).sort({ timestamp: -1 }).toArray());
+});
+
+app.post('/api/logs', requireDb, async (req, res) => {
+  if (!req.body?.id) return res.status(400).json({ error: 'Log entry and id are required' });
+  const db: Db = res.locals.db;
+  const entry = clean(req.body);
+  await db.collection('logs').updateOne({ id: entry.id }, { $set: entry }, { upsert: true });
+  res.json({ success: true, entry, mode: 'mongodb' });
+});
+
+app.get('/api/sessions', requireDb, async (_req, res) => {
+  const db: Db = res.locals.db;
+  res.json(await db.collection('sessions').find({}, { projection: { _id: 0 } }).sort({ completedAt: -1 }).toArray());
+});
+
+app.post('/api/sessions', requireDb, async (req, res) => {
+  if (!req.body?.id) return res.status(400).json({ error: 'Session and id are required' });
+  const db: Db = res.locals.db;
+  const session = clean(req.body);
+  await db.collection('sessions').updateOne({ id: session.id }, { $set: session }, { upsert: true });
+  if (Array.isArray(session.entries)) {
+    for (const rawEntry of session.entries) {
+      if (!rawEntry?.id) continue;
+      const entry = clean(rawEntry);
+      await db.collection('logs').updateOne({ id: entry.id }, { $set: entry }, { upsert: true });
+    }
+  }
+  res.json({ success: true, session, mode: 'mongodb' });
+});
+
+app.delete('/api/sessions/:id', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  await db.collection('sessions').deleteOne({ id: req.params.id });
+  res.json({ success: true, id: req.params.id, mode: 'mongodb' });
+});
+
+app.get('/api/active-draft', requireDb, async (_req, res) => {
+  const db: Db = res.locals.db;
+  const draft = await db.collection('drafts').findOne({ type: 'active_workout' }, { projection: { _id: 0 } });
+  res.json({ draft: draft?.data || null });
+});
+
+app.post('/api/active-draft', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  const draft = req.body?.draft;
+  if (draft) {
+    await db.collection('drafts').updateOne(
+      { type: 'active_workout' },
+      { $set: { type: 'active_workout', data: draft, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    );
+  } else {
+    await db.collection('drafts').deleteOne({ type: 'active_workout' });
+  }
+  res.json({ success: true, mode: 'mongodb' });
+});
+
+app.delete('/api/active-draft', requireDb, async (_req, res) => {
+  const db: Db = res.locals.db;
+  await db.collection('drafts').deleteOne({ type: 'active_workout' });
+  res.json({ success: true, mode: 'mongodb' });
+});
+
+app.post('/api/upload-image', requireDb, async (req, res) => {
+  const { imageBase64, filename } = req.body || {};
+  if (!imageBase64) return res.status(400).json({ error: 'No image provided' });
+
+  // Existing remote URLs can be stored directly on the exercise without upload.
+  if (/^https?:\/\//i.test(imageBase64)) {
+    return res.json({ success: true, url: imageBase64, mode: 'direct_url' });
+  }
+
+  const matches = String(imageBase64).match(/^data:([A-Za-z0-9.+/-]+);base64,(.+)$/);
+  if (!matches) return res.status(400).json({ error: 'Billedet skal være en gyldig base64 data-URL.' });
+
+  const db: Db = res.locals.db;
+  const mimeType = matches[1];
+  const buffer = Buffer.from(matches[2], 'base64');
+  const imageId = `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const safeFilename = typeof filename === 'string' ? path.basename(filename) : undefined;
+
+  await db.collection('images').insertOne({
+    id: imageId,
+    filename: safeFilename || imageId,
+    mimeType,
+    data: buffer,
+    size: buffer.length,
+    createdAt: new Date().toISOString(),
+  });
+
+  res.json({ success: true, url: `/api/images/${imageId}`, imageId, mode: 'mongodb' });
+});
+
+app.get('/api/images/:id', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  const doc: any = await db.collection('images').findOne({ id: req.params.id });
+  if (!doc?.data) return res.status(404).send('Billede ikke fundet');
+  const data = doc.data?.buffer ? Buffer.from(doc.data.buffer) : Buffer.from(doc.data);
+  res.set({ 'Content-Type': doc.mimeType || 'image/jpeg', 'Content-Length': String(data.length), 'Cache-Control': 'public, max-age=31536000, immutable' });
+  res.send(data);
+});
+
+app.get('/api/uploads/:filename', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  const filename = req.params.filename;
+  const doc: any = await db.collection('images').findOne({ $or: [{ filename }, { id: filename.replace(/\.[^/.]+$/, '') }] });
+  if (!doc?.data) return res.status(404).send('Billede ikke fundet');
+  const data = doc.data?.buffer ? Buffer.from(doc.data.buffer) : Buffer.from(doc.data);
+  res.set({ 'Content-Type': doc.mimeType || 'image/jpeg', 'Content-Length': String(data.length), 'Cache-Control': 'public, max-age=31536000, immutable' });
+  res.send(data);
+});
+
+app.post('/api/reset', requireDb, async (req, res) => {
+  const db: Db = res.locals.db;
+  const { exercises = [], plans = [], logs = [] } = req.body || {};
+  await Promise.all([
+    db.collection('exercises').deleteMany({}),
+    db.collection('plans').deleteMany({}),
+    db.collection('logs').deleteMany({}),
+    db.collection('sessions').deleteMany({}),
+    db.collection('drafts').deleteMany({}),
+  ]);
+  if (exercises.length) await db.collection('exercises').insertMany(exercises.map(clean));
+  if (plans.length) await db.collection('plans').insertMany(plans.map(clean));
+  if (logs.length) await db.collection('logs').insertMany(logs.map(clean));
+  res.json({ success: true, mode: 'mongodb' });
+});
+
+// Return useful JSON instead of silently falling back if an API handler throws.
+app.use('/api', (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[API]', err);
+  res.status(500).json({ error: err instanceof Error ? err.message : 'Ukendt serverfejl' });
 });
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`FysioDanmark Træningssystem running on http://localhost:${PORT}`);
+    console.log(`Workout system running on http://localhost:${PORT}`);
+    if (!process.env.MONGODB_URI) console.warn('[MongoDB] MONGODB_URI is not configured. API writes/reads will fail until it is set.');
   });
 }
 

@@ -145,7 +145,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         }
       }
 
-      // Case B: Check for automatic active draft in database or localStorage
+      // Case B: Check for automatic active draft in the shared MongoDB database
       try {
         const draft = await StorageService.getActiveWorkoutDraft();
         if (draft && draft.exercises && draft.exercises.length > 0) {
