@@ -1,13 +1,14 @@
 import React, { useState, useRef, useMemo } from 'react';
-import { X, Upload, Dumbbell, Image as ImageIcon, Video, Layers, Check, Plus, Trash2 } from 'lucide-react';
+import { X, Upload, Dumbbell, Image as ImageIcon, Video, Layers, Check, Plus, Trash2, Loader2, Database } from 'lucide-react';
 import { Exercise, ImagePosition } from '../types';
 import { createExerciseSvg } from '../db/defaultData';
 import { StorageService } from '../db/storage';
 import { ImageFocalAdjuster } from './ImageFocalAdjuster';
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface AddExerciseModalProps {
   onClose: () => void;
-  onSave: (exercise: Exercise) => void;
+  onSave: (exercise: Exercise) => Promise<void> | void;
   exercises?: Exercise[];
   existingCategories?: string[];
 }
@@ -57,6 +58,8 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
   const [imagePosition, setImagePosition] = useState<ImagePosition>({ x: 50, y: 50, scale: 1 });
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,20 +69,28 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
       return;
     }
     setIsUploading(true);
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const result = e.target?.result as string;
-      setImagePreview(result);
-      try {
-        const savedUrl = await StorageService.uploadImage(result, file.name);
-        setImageUrl(savedUrl);
-      } catch {
+    setSaveError(null);
+    try {
+      // 1. Optimize/compress locally
+      const compressedDataUrl = await compressImageFile(file, 1400, 1400, 0.86);
+      setImagePreview(compressedDataUrl);
+
+      // 2. Upload directly to MongoDB Atlas
+      const savedUrl = await StorageService.uploadImage(compressedDataUrl, file.name);
+      setImageUrl(savedUrl);
+    } catch (err: any) {
+      console.error('Billedupload fejl:', err);
+      // Fallback
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const result = e.target?.result as string;
+        setImagePreview(result);
         setImageUrl(result);
-      } finally {
-        setIsUploading(false);
-      }
-    };
-    reader.readAsDataURL(file);
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -98,7 +109,7 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
@@ -120,8 +131,17 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
       createdAt: new Date().toISOString(),
     };
 
-    onSave(newExercise);
-    onClose();
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(newExercise);
+      onClose();
+    } catch (err: any) {
+      console.error('Fejl ved oprettelse af øvelse:', err);
+      setSaveError(err.message || 'Kunne ikke gemme øvelsen i MongoDB Atlas.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -447,21 +467,45 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
             </label>
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
-            >
-              Annuller
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 flex items-center gap-1.5"
-            >
-              <Check className="w-4 h-4" />
-              Gem øvelse i biblioteket
-            </button>
+          {saveError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
+              <span className="font-semibold">Fejl:</span> {saveError}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-slate-100">
+            <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
+              <Database className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Gemmes i MongoDB Atlas</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isSaving}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
+              >
+                Annuller
+              </button>
+              <button
+                type="submit"
+                disabled={isSaving || isUploading}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Gemmer i MongoDB...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Gem øvelse i biblioteket</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </form>
       </div>

@@ -19,8 +19,8 @@ import { getExerciseImageStyle } from '../utils/imageStyle';
 interface ExerciseLibraryProps {
   exercises: Exercise[];
   logs: ExerciseLogEntry[];
-  onSaveExercise: (exercise: Exercise) => void;
-  onDeleteExercise: (id: string) => void;
+  onSaveExercise: (exercise: Exercise) => Promise<void> | void;
+  onDeleteExercise: (id: string) => Promise<void> | void;
 }
 
 export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({

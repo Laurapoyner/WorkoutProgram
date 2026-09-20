@@ -183,23 +183,38 @@ export default function App() {
 
   // Handlers for exercises
   const handleSaveExercise = async (exercise: Exercise) => {
-    const existingIndex = exercises.findIndex((e) => e.id === exercise.id);
-    let updatedExercises: Exercise[];
-    if (existingIndex >= 0) {
-      updatedExercises = [...exercises];
-      updatedExercises[existingIndex] = exercise;
-    } else {
-      updatedExercises = [exercise, ...exercises];
+    try {
+      const res = await StorageService.saveExercise(exercise);
+      const savedEx = res?.exercise || exercise;
+      const existingIndex = exercises.findIndex((e) => e.id === savedEx.id);
+      let updatedExercises: Exercise[];
+      if (existingIndex >= 0) {
+        updatedExercises = [...exercises];
+        updatedExercises[existingIndex] = savedEx;
+      } else {
+        updatedExercises = [savedEx, ...exercises];
+      }
+      setExercises(updatedExercises);
+      if (res?.mode === 'mongodb') {
+        showToast(`Øvelsen "${savedEx.name}" blev gemt permanent i MongoDB Atlas!`);
+      } else {
+        showToast(`Øvelsen "${savedEx.name}" blev gemt lokalt.`);
+      }
+    } catch (err: any) {
+      console.error('Fejl ved gemning af øvelse:', err);
+      showToast(`Fejl ved gemning i databasen: ${err.message || 'Ukendt fejl'}`);
+      throw err;
     }
-    setExercises(updatedExercises);
-    await StorageService.saveExercise(exercise);
-    showToast(`Øvelsen "${exercise.name}" blev gemt i databasen!`);
   };
 
   const handleDeleteExercise = async (id: string) => {
-    setExercises(exercises.filter((e) => e.id !== id));
-    await StorageService.deleteExercise(id);
-    showToast('Øvelse slettet fra biblioteket');
+    try {
+      await StorageService.deleteExercise(id);
+      setExercises((prev) => prev.filter((e) => e.id !== id));
+      showToast('Øvelsen blev slettet fra MongoDB Atlas');
+    } catch (err: any) {
+      showToast(`Fejl ved sletning: ${err.message}`);
+    }
   };
 
   // Handler when a workout is completed and saved
@@ -587,9 +602,8 @@ export default function App() {
         <AddExerciseModal
           exercises={exercises}
           onClose={() => setIsAddExerciseModalOpen(false)}
-          onSave={(newEx) => {
-            handleSaveExercise(newEx);
-            setIsAddExerciseModalOpen(false);
+          onSave={async (newEx) => {
+            await handleSaveExercise(newEx);
           }}
         />
       )}

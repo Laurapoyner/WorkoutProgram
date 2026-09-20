@@ -112,13 +112,13 @@ export const StorageService = {
   },
 
   async getExercises(): Promise<Exercise[]> {
-    // Try server first
+    // 1. Fetch from backend / MongoDB Atlas
     try {
       const res = await fetch('/api/exercises');
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          // Update local cache
+        if (Array.isArray(data)) {
+          // Mirror to local cache for offline resilience
           try {
             const db = await openDatabase();
             const tx = db.transaction(STORES.EXERCISES, 'readwrite');
@@ -131,10 +131,10 @@ export const StorageService = {
         }
       }
     } catch (err) {
-      console.warn('Could not fetch exercises from server, reading local store', err);
+      console.warn('Kunne ikke hente øvelser fra serveren, anvender lokal cache:', err);
     }
 
-    // Local IndexedDB fallback
+    // 2. Local IndexedDB fallback if offline
     try {
       const db = await openDatabase();
       return new Promise((resolve) => {
@@ -155,56 +155,61 @@ export const StorageService = {
     }
   },
 
-  async saveExercise(exercise: Exercise): Promise<void> {
-    // 1. Send to server
-    try {
-      await fetch('/api/exercises', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(exercise),
-      });
-    } catch (err) {
-      console.warn('Server save failed, saving locally', err);
+  async saveExercise(exercise: Exercise): Promise<{ success: boolean; mode: 'mongodb' | 'local'; exercise: Exercise }> {
+    let saveResult = { success: true, mode: 'local' as const, exercise };
+
+    // 1. Send directly to MongoDB API endpoint
+    const res = await fetch('/api/exercises', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(exercise),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ error: 'Netværksfejl ved gemning af øvelse' }));
+      throw new Error(errData.error || `Server svarede med status ${res.status}`);
     }
 
-    // 2. Save locally
+    const data = await res.json();
+    saveResult = {
+      success: true,
+      mode: data.mode || 'mongodb',
+      exercise: data.exercise || exercise,
+    };
+
+    // 2. Mirror into IndexedDB / localStorage for instant offline access
     try {
       const db = await openDatabase();
-      await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(STORES.EXERCISES, 'readwrite');
-        const store = tx.objectStore(STORES.EXERCISES);
-        const req = store.put(exercise);
-        req.onsuccess = () => resolve();
-        req.onerror = () => reject(req.error);
-      });
+      const tx = db.transaction(STORES.EXERCISES, 'readwrite');
+      tx.objectStore(STORES.EXERCISES).put(saveResult.exercise);
     } catch {
-      const all = getLocalFallback<Exercise[]>('exercises', INITIAL_EXERCISES);
+      const all = getLocalFallback<Exercise[]>('exercises', []);
       const idx = all.findIndex((e) => e.id === exercise.id);
-      if (idx >= 0) all[idx] = exercise;
-      else all.unshift(exercise);
+      if (idx >= 0) all[idx] = saveResult.exercise;
+      else all.unshift(saveResult.exercise);
       setLocalFallback('exercises', all);
     }
+
+    return saveResult;
   },
 
   async deleteExercise(id: string): Promise<void> {
-    try {
-      await fetch(`/api/exercises/${id}`, { method: 'DELETE' });
-    } catch (err) {
-      console.warn('Server delete failed', err);
+    const res = await fetch(`/api/exercises/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Fejl ved sletning af øvelse' }));
+      throw new Error(err.error || `Sletning mislykkedes med status ${res.status}`);
     }
 
     try {
       const db = await openDatabase();
-      await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(STORES.EXERCISES, 'readwrite');
-        const store = tx.objectStore(STORES.EXERCISES);
-        const req = store.delete(id);
-        req.onsuccess = () => resolve();
-        req.onerror = () => reject(req.error);
-      });
+      const tx = db.transaction(STORES.EXERCISES, 'readwrite');
+      tx.objectStore(STORES.EXERCISES).delete(id);
     } catch {
-      const all = getLocalFallback<Exercise[]>('exercises', INITIAL_EXERCISES);
-      setLocalFallback('exercises', all.filter((e) => e.id !== id));
+      const all = getLocalFallback<Exercise[]>('exercises', []);
+      setLocalFallback(
+        'exercises',
+        all.filter((e) => e.id !== id)
+      );
     }
   },
 

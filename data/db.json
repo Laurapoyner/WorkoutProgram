@@ -1,0 +1,18 @@
+{
+  "exercises": [
+    {
+      "id": "ex-test-1789891590353",
+      "name": "Test MongoDB Øvelse",
+      "description": "Verifikation af gemning i Atlas",
+      "targetArea": "Knæ & Lår",
+      "defaultSets": 3,
+      "defaultReps": "12-15",
+      "imageUrl": "/api/images/img_1789891590246_6pubzb",
+      "createdAt": "2026-09-20T08:06:30.353Z"
+    }
+  ],
+  "plans": [],
+  "logs": [],
+  "sessions": [],
+  "draft": null
+}

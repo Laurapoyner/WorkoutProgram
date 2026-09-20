@@ -12,6 +12,7 @@ import {
 import { StorageService } from '../db/storage';
 import { Exercise, ImagePosition } from '../types';
 import { ImageFocalAdjuster } from './ImageFocalAdjuster';
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface ImageUploadModalProps {
   exercise: Exercise;
@@ -68,19 +69,21 @@ export const ImageUploadModal: React.FC<ImageUploadModalProps> = ({
       return;
     }
     setIsUploading(true);
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const base64 = e.target?.result as string;
-      try {
-        const savedUrl = await StorageService.uploadImage(base64, file.name);
-        setCurrentImage(savedUrl);
-      } catch {
-        setCurrentImage(base64);
-      } finally {
-        setIsUploading(false);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressedBase64 = await compressImageFile(file, 1400, 1400, 0.86);
+      const savedUrl = await StorageService.uploadImage(compressedBase64, file.name);
+      setCurrentImage(savedUrl);
+    } catch (err: any) {
+      console.error('Billedupload fejl:', err);
+      // Fallback to local FileReader
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setCurrentImage(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
