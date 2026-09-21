@@ -289,7 +289,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
 
   const renderSessionCard = (session: CompletedSession) => {
     const isExpanded = expandedSessionId === session.id;
-    const isPartial = session.isPartial || session.status === 'partial' || session.exercisesCompletedCount < session.totalExercisesCount;
+    const isPartial = session.isPartial || session.status === 'partial' || (session.exercisesCompletedCount + (session.exercisesSkippedCount || 0)) < session.totalExercisesCount;
     const time = formatSessionTime(session.completedAt || session.startedAt);
 
     return (
@@ -307,7 +307,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
               <div className="font-bold text-slate-900 text-sm capitalize">{formatDate(session.date, true)}</div>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
                 {time && <span>Kl. {time}</span>}
-                <span>{session.exercisesCompletedCount}/{session.totalExercisesCount} øvelser</span>
+                <span>{session.exercisesCompletedCount} udført{session.exercisesSkippedCount ? ` · ${session.exercisesSkippedCount} ikke udført` : ''} · ${session.totalExercisesCount} i alt</span>
                 {session.durationSeconds > 0 && <span>{formatDuration(session.durationSeconds)}</span>}
                 {isPartial && <span className="font-semibold text-amber-700">Delvist gennemført</span>}
               </div>
@@ -336,6 +336,13 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
                   </div>
                 );
               })}
+              {(session.skippedExercises || []).map((entry) => (
+                <div key={`skipped-${entry.exerciseId}`} className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs">
+                  <div className="font-bold text-slate-900">{entry.exerciseName}</div>
+                  <div className="mt-1 text-amber-800 font-semibold">Ikke udført</div>
+                  <div className="mt-1 text-slate-600">Begrundelse: {entry.reason === 'time' ? 'Tid' : (entry.reasonText || 'Andet')}</div>
+                </div>
+              ))}
             </div>
             <div className="flex flex-wrap justify-end gap-2 pt-1">
               {onResumeSession && (
@@ -401,7 +408,7 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
             {programGroups.map((group) => {
               const latest = group.sessions[0];
-              const completed = group.sessions.filter((session) => !(session.isPartial || session.status === 'partial' || session.exercisesCompletedCount < session.totalExercisesCount)).length;
+              const completed = group.sessions.filter((session) => !(session.isPartial || session.status === 'partial' || (session.exercisesCompletedCount + (session.exercisesSkippedCount || 0)) < session.totalExercisesCount)).length;
               return (
                 <button key={group.key} type="button" onClick={() => openProgram(group.key)} className="bg-white border border-slate-200 rounded-2xl p-4 text-left hover:border-blue-300 hover:bg-blue-50/20 transition-all shadow-xs group">
                   <div className="flex items-start justify-between gap-3">

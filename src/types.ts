@@ -5,6 +5,8 @@ export interface ImagePosition {
 }
 
 export type ExerciseTrackingMode = 'sets_reps_weight' | 'timed_score';
+export type ExerciseExecutionStatus = 'pending' | 'completed' | 'skipped';
+export type ExerciseSkipReason = 'time' | 'other';
 
 export interface ScoreRoundResult {
   round: number;
@@ -59,6 +61,9 @@ export interface PlanExercise {
   rightLegReps?: string;
   notes?: string;
   isCompleted?: boolean;
+  executionStatus?: ExerciseExecutionStatus;
+  skipReason?: ExerciseSkipReason;
+  skipReasonText?: string;
   completedAt?: string;
   activeTimerSeconds?: number;
   trackingMode?: ExerciseTrackingMode;
@@ -109,6 +114,13 @@ export interface ExerciseLogEntry {
   lsiPercent?: number;
 }
 
+export interface SkippedExerciseRecord {
+  exerciseId: string;
+  exerciseName: string;
+  reason: ExerciseSkipReason;
+  reasonText?: string;
+}
+
 export interface CompletedSession {
   id: string;
   planId: string;
@@ -118,11 +130,13 @@ export interface CompletedSession {
   completedAt: string;
   durationSeconds: number;
   exercisesCompletedCount: number;
+  exercisesSkippedCount?: number;
   totalExercisesCount: number;
   status?: 'completed' | 'partial';
   isPartial?: boolean;
   entries: ExerciseLogEntry[];
   remainingExercises?: PlanExercise[];
+  skippedExercises?: SkippedExerciseRecord[];
   notes?: string;
 }
 

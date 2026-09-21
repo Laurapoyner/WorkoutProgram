@@ -20,6 +20,7 @@ import {
   BookmarkCheck,
   HelpCircle,
   X,
+  Ban,
 } from 'lucide-react';
 import { WorkoutPlan, PlanExercise, ExerciseLogEntry, CompletedSession, Exercise, WorkoutDraft } from '../types';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
@@ -79,6 +80,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const [showPartialModal, setShowPartialModal] = useState(false);
   const [ongoingDrafts, setOngoingDrafts] = useState<WorkoutDraft[]>([]);
   const [showDraftList, setShowDraftList] = useState(false);
+  const [skipReasonExerciseId, setSkipReasonExerciseId] = useState<string | null>(null);
+  const [skipOtherText, setSkipOtherText] = useState('');
 
   // Modals
   const [inspectExercise, setInspectExercise] = useState<Exercise | null>(null);
@@ -113,6 +116,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         lowerScoreIsBetter: pe.lowerScoreIsBetter ?? baseEx?.lowerScoreIsBetter,
         scorePerSide: pe.scorePerSide ?? baseEx?.scorePerSide,
         isCompleted: false,
+        executionStatus: 'pending',
+        skipReason: undefined,
+        skipReasonText: undefined,
         activeTimerSeconds: 0,
       } as PlanExercise;
     });
@@ -156,6 +162,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             lowerScoreIsBetter: loggedEntry.lowerScoreIsBetter ?? pe.lowerScoreIsBetter,
             scoreResults: loggedEntry.scoreResults ?? pe.scoreResults,
             isCompleted: true,
+            executionStatus: 'completed',
             activeTimerSeconds: loggedEntry.durationSeconds || 0,
           };
         });
@@ -184,7 +191,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
           setSessionSeconds(draft.sessionSeconds || 0);
           setWorkoutDate(draft.workoutDate || new Date().toISOString().split('T')[0]);
           setTimers(draft.timers || {});
-          const doneCount = refreshed.filter((e) => e.isCompleted).length;
+          const doneCount = refreshed.filter((e) => e.executionStatus === 'completed' || e.isCompleted).length;
           const updatedTime = new Date(draft.lastUpdated).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
           setDraftBannerMessage(`Kladde til dette program: ${doneCount} af ${refreshed.length} øvelser udført · gemt ${updatedTime}.`);
           setDraftBannerVisible(true);
@@ -235,7 +242,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     setWorkoutDate(draft.workoutDate || new Date().toISOString().split('T')[0]);
     setTimers(draft.timers || {});
     setIsDraftLoaded(true);
-    const doneCount = refreshed.filter((e) => e.isCompleted).length;
+    const doneCount = refreshed.filter((e) => e.executionStatus === 'completed' || e.isCompleted).length;
     const updatedTime = new Date(draft.lastUpdated).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     setDraftBannerMessage(`Kladde valgt: ${doneCount} af ${refreshed.length} øvelser udført · gemt ${updatedTime}.`);
     setDraftBannerVisible(true);
@@ -300,6 +307,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             : false;
           return Boolean(
             e.isCompleted ||
+            e.executionStatus === 'skipped' ||
             (e.notes && e.notes.trim().length > 0) ||
             (Array.isArray(e.scoreResults) && e.scoreResults.length > 0) ||
             Number(e.activeTimerSeconds || 0) > 0 ||
@@ -409,13 +417,19 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       }));
     }
 
+    setSkipReasonExerciseId(null);
+    setSkipOtherText('');
     setSessionExercises((prev) =>
       prev.map((item) => {
         if (item.id === exerciseId) {
-          const nextCompleted = !item.isCompleted;
+          const currentlyCompleted = item.executionStatus === 'completed' || item.isCompleted;
+          const nextCompleted = !currentlyCompleted;
           return {
             ...item,
             isCompleted: nextCompleted,
+            executionStatus: nextCompleted ? 'completed' : 'pending',
+            skipReason: undefined,
+            skipReasonText: undefined,
             completedAt: nextCompleted ? new Date().toISOString() : undefined,
             activeTimerSeconds: timers[exerciseId]?.seconds || item.activeTimerSeconds || 0,
           };
@@ -425,12 +439,45 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     );
   };
 
-  const pendingExercises = sessionExercises.filter((e) => !e.isCompleted);
-  const completedExercises = sessionExercises.filter((e) => e.isCompleted);
+  const markExerciseSkipped = (exerciseId: string, reason: 'time' | 'other', reasonText?: string) => {
+    if (timers[exerciseId]?.isRunning) {
+      setTimers((prev) => ({
+        ...prev,
+        [exerciseId]: { ...prev[exerciseId], isRunning: false },
+      }));
+    }
+    setSessionExercises((prev) => prev.map((item) => item.id === exerciseId ? {
+      ...item,
+      isCompleted: false,
+      executionStatus: 'skipped',
+      skipReason: reason,
+      skipReasonText: reason === 'other' ? (reasonText || '').trim() : undefined,
+      completedAt: undefined,
+      activeTimerSeconds: timers[exerciseId]?.seconds || item.activeTimerSeconds || 0,
+    } : item));
+    setSkipReasonExerciseId(null);
+    setSkipOtherText('');
+  };
+
+  const restoreSkippedExercise = (exerciseId: string) => {
+    setSessionExercises((prev) => prev.map((item) => item.id === exerciseId ? {
+      ...item,
+      executionStatus: 'pending',
+      skipReason: undefined,
+      skipReasonText: undefined,
+      isCompleted: false,
+    } : item));
+  };
+
+  const pendingExercises = sessionExercises.filter((e) => (e.executionStatus || (e.isCompleted ? 'completed' : 'pending')) === 'pending');
+  const completedExercises = sessionExercises.filter((e) => (e.executionStatus || (e.isCompleted ? 'completed' : 'pending')) === 'completed');
+  const skippedExercises = sessionExercises.filter((e) => e.executionStatus === 'skipped');
 
   const completedCount = completedExercises.length;
+  const skippedCount = skippedExercises.length;
+  const handledCount = completedCount + skippedCount;
   const totalCount = sessionExercises.length;
-  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const progressPercent = totalCount > 0 ? Math.round((handledCount / totalCount) * 100) : 0;
 
   // Explicit action: Pause and save draft for later
   const handlePauseAndSaveDraft = async () => {
@@ -471,6 +518,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               imageUrl: baseEx?.imageUrl || pe.imageUrl,
               imagePosition: baseEx?.imagePosition || pe.imagePosition,
               isCompleted: false,
+              executionStatus: 'pending',
+              skipReason: undefined,
+              skipReasonText: undefined,
               activeTimerSeconds: 0,
             };
           })
@@ -482,7 +532,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
   // User triggers "Gem træningspas"
   const handleFinishWorkoutClick = () => {
-    if (completedCount === 0) {
+    if (handledCount === 0) {
       if (!confirm('Du har ikke markeret nogen øvelser som udført endnu. Vil du alligevel gemme dagens pas?')) {
         return;
       }
@@ -491,7 +541,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     }
 
     // If not all exercises are completed, prompt the user with choices
-    if (completedCount < totalCount) {
+    if (handledCount < totalCount) {
       setShowPartialModal(true);
       return;
     }
@@ -555,11 +605,18 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       completedAt: new Date(completedTimestamp).toISOString(),
       durationSeconds: sessionSeconds,
       exercisesCompletedCount: completedCount,
+      exercisesSkippedCount: skippedCount,
       totalExercisesCount: totalCount,
       status: isPartial ? 'partial' : 'completed',
       isPartial: isPartial,
       entries: logEntries,
       remainingExercises: pendingExercises,
+      skippedExercises: skippedExercises.map((e) => ({
+        exerciseId: e.exerciseId,
+        exerciseName: e.name,
+        reason: e.skipReason || 'other',
+        reasonText: e.skipReasonText,
+      })),
     };
 
     // Clear active draft since session is logged
@@ -807,7 +864,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm shadow-blue-600/30 cursor-pointer"
             >
               <Save className="w-4 h-4" />
-              <span>Gem træningspas ({completedCount}/{totalCount})</span>
+              <span>Gem træningspas ({handledCount}/{totalCount})</span>
             </button>
           </div>
         </div>
@@ -821,7 +878,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             />
           </div>
           <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
-            {progressPercent}% gennemført ({completedCount} af {totalCount})
+            {progressPercent}% registreret ({handledCount} af {totalCount})
           </span>
         </div>
       </div>
@@ -838,7 +895,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             </span>
           </div>
           <p className="text-xs text-slate-400">
-            Angiv belastning og tryk på "Markér som udført"
+            Registrér øvelsen som udført – eller vælg ikke udført
           </p>
         </div>
 
@@ -849,10 +906,10 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             </div>
             <div>
               <h4 className="text-base font-bold text-slate-900">
-                Alle øvelser i dagens pas er udført!
+                Alle øvelser i dagens pas er registreret!
               </h4>
               <p className="text-xs text-slate-600 mt-1 max-w-md mx-auto">
-                Fantastisk indsats! Tryk på "Gem træningspas" nedenfor for at logge din fremgang til databasen.
+                Tryk på "Gem træningspas" nedenfor for at gemme dagens udførte og ikke udførte øvelser.
               </p>
             </div>
             <button
@@ -1063,15 +1120,55 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                         className="text-xs text-slate-700 placeholder-slate-400 bg-slate-50 hover:bg-slate-100/80 focus:bg-white px-2.5 py-1.5 rounded-lg border border-transparent focus:border-blue-400 focus:outline-none flex-1 min-w-0 transition-all"
                       />
 
-                      <button
-                        type="button"
-                        onClick={() => handleToggleComplete(exercise.id)}
-                        className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-xs shadow-blue-600/30 flex items-center gap-1.5 shrink-0 cursor-pointer"
-                      >
-                        <Check className="w-3.5 h-3.5 stroke-[3]" />
-                        <span>Udført</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => { setSkipReasonExerciseId((id) => id === exercise.id ? null : exercise.id); setSkipOtherText(''); }}
+                          className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 text-xs font-semibold transition-colors flex items-center gap-1.5"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          <span>Ikke udført</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleComplete(exercise.id)}
+                          className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-xs shadow-blue-600/30 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          <span>Udført</span>
+                        </button>
+                      </div>
                     </div>
+
+                    {skipReasonExerciseId === exercise.id && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 space-y-2">
+                        <div className="text-[11px] font-bold text-amber-900">Hvorfor blev øvelsen ikke udført?</div>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" onClick={() => markExerciseSkipped(exercise.id, 'time')} className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-semibold hover:bg-amber-100">Tid</button>
+                          <button type="button" onClick={() => setSkipOtherText((v) => v || ' ')} className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-semibold hover:bg-amber-100">Andet</button>
+                        </div>
+                        {skipOtherText !== '' && (
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              autoFocus
+                              value={skipOtherText.trimStart()}
+                              onChange={(e) => setSkipOtherText(e.target.value)}
+                              placeholder="Skriv hvorfor…"
+                              className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-white border border-amber-300 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!skipOtherText.trim()}
+                              onClick={() => markExerciseSkipped(exercise.id, 'other', skipOtherText)}
+                              className="px-3 py-2 rounded-lg bg-amber-600 disabled:opacity-40 text-white text-xs font-bold"
+                            >
+                              Gem begrundelse
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -1080,7 +1177,33 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         )}
       </div>
 
-      {/* SECTION 2: UDFØRT I DAG (Completed exercises) */}
+      {/* SECTION 2: IKKE UDFØRT */}
+      {skippedExercises.length > 0 && (
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center gap-2 px-1">
+            <h3 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-2">
+              <Ban className="w-4 h-4 text-amber-600" />
+              Ikke udført
+            </h3>
+            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">{skippedCount}</span>
+          </div>
+          <div className="space-y-2">
+            {skippedExercises.map((exercise) => (
+              <div key={exercise.id} className="bg-white rounded-2xl border border-amber-200 p-3.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-900 truncate">{exercise.name}</div>
+                  <div className="text-xs text-amber-800 mt-0.5">
+                    {exercise.skipReason === 'time' ? 'Begrundelse: Tid' : `Begrundelse: ${exercise.skipReasonText || 'Andet'}`}
+                  </div>
+                </div>
+                <button type="button" onClick={() => restoreSkippedExercise(exercise.id)} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-xs font-semibold shrink-0">Fortryd / Rediger</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* SECTION 3: UDFØRT I DAG (Completed exercises) */}
       {completedExercises.length > 0 && (
         <div className="space-y-4 pt-4">
           <div className="flex items-center justify-between px-1">
@@ -1155,12 +1278,12 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
         <div>
           <div className="font-bold text-sm text-slate-900">
-            {completedCount === totalCount
-              ? 'Alle øvelser er udført!'
-              : `${completedCount} af ${totalCount} øvelser udført i dette pas`}
+            {handledCount === totalCount
+              ? (skippedCount > 0 ? `Alle øvelser er registreret (${completedCount} udført, ${skippedCount} ikke udført)` : 'Alle øvelser er udført!')
+              : `${handledCount} af ${totalCount} øvelser registreret i dette pas`}
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            {completedCount === totalCount
+            {handledCount === totalCount
               ? 'Tryk på knappen for at gemme og afslutte passet i databasen.'
               : 'Du kan gemme nu som delvist gennemført, eller sætte på pause og fortsætte senere.'}
           </p>
