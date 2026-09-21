@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { WorkoutPlan, Exercise, PlanExercise } from '../types';
 import { getExerciseImageStyle } from '../utils/imageStyle';
+import { getExerciseTags } from '../utils/exerciseTags';
 import { AddExerciseModal } from './AddExerciseModal';
 import { ExorLivePdfImportModal } from './ExorLivePdfImportModal';
 
@@ -53,16 +54,16 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
   const [selectorCategory, setSelectorCategory] = useState<string>('alle');
   const [selectorSearch, setSelectorSearch] = useState<string>('');
 
-  // Extract all unique categories with exercise counts
+  // Extract all tags with exercise counts. One exercise can belong to multiple tags.
   const categoriesWithCount = useMemo(() => {
     const map = new Map<string, number>();
     exercises.forEach((ex) => {
-      const cat = ex.targetArea?.trim() || 'Generelt';
-      map.set(cat, (map.get(cat) || 0) + 1);
+      const tags = getExerciseTags(ex);
+      (tags.length ? tags : ['Generelt']).forEach((tag) => map.set(tag, (map.get(tag) || 0) + 1));
     });
     return Array.from(map.entries())
       .map(([category, count]) => ({ category, count }))
-      .sort((a, b) => b.count - a.count);
+      .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category, 'da'));
   }, [exercises]);
 
   // New/Edit plan form state
@@ -93,8 +94,8 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
     setSelectedDates([new Date().toISOString().split('T')[0]]);
 
     // Find all exercises belonging to this category
-    const matchingExercises = exercises.filter(
-      (ex) => ex.targetArea?.trim().toLowerCase() === categoryName.trim().toLowerCase()
+    const matchingExercises = exercises.filter((ex) =>
+      getExerciseTags(ex).some((tag) => tag.toLowerCase() === categoryName.trim().toLowerCase())
     );
 
     const initialPlanExercises: PlanExercise[] = matchingExercises.map((exercise) => ({
@@ -105,6 +106,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
       imageUrl: exercise.imageUrl,
       videoUrl: exercise.videoUrl,
       targetArea: exercise.targetArea,
+      categories: getExerciseTags(exercise),
       sets: exercise.defaultSets || 3,
       reps: exercise.defaultReps || '10-15',
       weightKg: exercise.defaultWeightKg ?? 0,
@@ -132,6 +134,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
           imagePosition: ex.imagePosition,
           videoUrl: ex.videoUrl,
           targetArea: ex.targetArea,
+          categories: getExerciseTags(ex),
           sets: ex.defaultSets || 3,
           reps: ex.defaultReps || '10-15',
           weightKg: ex.defaultWeightKg ?? 0,
@@ -196,6 +199,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
         imagePosition: exercise.imagePosition,
         videoUrl: exercise.videoUrl,
         targetArea: exercise.targetArea,
+        categories: getExerciseTags(exercise),
         sets: exercise.defaultSets || 3,
         reps: exercise.defaultReps || '10-15',
         weightKg: exercise.defaultWeightKg ?? 0,
@@ -737,7 +741,7 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
         {plans.map((plan) => {
           const isActive = plan.id === activePlanId;
           const planCategories = Array.from(
-            new Set(plan.exercises.map((pe) => pe.targetArea).filter(Boolean))
+            new Set(plan.exercises.flatMap((pe) => getExerciseTags(pe)))
           );
 
           return (
@@ -883,15 +887,16 @@ export const PlanManager: React.FC<PlanManagerProps> = ({
       {/* Modal: Exercise Selector for Plan with Categories */}
       {showExerciseSelector && (() => {
         const filteredSelectorExercises = exercises.filter((ex) => {
+          const tags = getExerciseTags(ex);
           const matchesCategory =
             selectorCategory === 'alle' ||
-            (ex.targetArea && ex.targetArea.toLowerCase() === selectorCategory.toLowerCase());
+            tags.some((tag) => tag.toLowerCase() === selectorCategory.toLowerCase());
 
           const matchesSearch =
             !selectorSearch.trim() ||
             ex.name.toLowerCase().includes(selectorSearch.toLowerCase()) ||
             ex.description.toLowerCase().includes(selectorSearch.toLowerCase()) ||
-            ex.targetArea?.toLowerCase().includes(selectorSearch.toLowerCase());
+            tags.some((tag) => tag.toLowerCase().includes(selectorSearch.toLowerCase()));
 
           return matchesCategory && matchesSearch;
         });

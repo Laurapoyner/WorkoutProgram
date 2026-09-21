@@ -49,6 +49,98 @@ function clean<T extends Record<string, any>>(value: T): T {
   return rest as T;
 }
 
+function normalizeKey(value: unknown): string {
+  return String(value || '')
+    .toLocaleLowerCase('da-DK')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+}
+
+function stablePlanKeyForDraft(draft: any): string {
+  return draft?.stablePlanKey || normalizeKey(draft?.planTitle) || String(draft?.planId || 'unknown-plan');
+}
+
+function draftCompletedCount(draft: any): number {
+  return Array.isArray(draft?.exercises) ? draft.exercises.filter((e: any) => Boolean(e?.isCompleted)).length : 0;
+}
+
+function draftActivityScore(draft: any): number {
+  if (!draft) return 0;
+  const exercises = Array.isArray(draft.exercises) ? draft.exercises : [];
+  const completed = draftCompletedCount(draft);
+  const notes = exercises.filter((e: any) => String(e?.notes || '').trim().length > 0).length;
+  const scoreResults = exercises.reduce((sum: number, e: any) => sum + (Array.isArray(e?.scoreResults) ? e.scoreResults.length : 0), 0);
+  const exerciseTimerSeconds = exercises.reduce((sum: number, e: any) => sum + Number(e?.activeTimerSeconds || 0), 0);
+  const timers = draft?.timers && typeof draft.timers === 'object'
+    ? Object.values(draft.timers as Record<string, any>).reduce((sum: number, timer: any) => sum + Number(timer?.seconds || 0), 0)
+    : 0;
+  return completed * 100000 + notes * 1000 + scoreResults * 100 + Number(draft.sessionSeconds || 0) + exerciseTimerSeconds + timers;
+}
+
+function normalizeWorkoutDraft(rawDraft: any, fallbackUpdatedAt?: unknown) {
+  const draft = rawDraft || {};
+  const stablePlanKey = stablePlanKeyForDraft(draft);
+  const aliases = Array.from(new Set([
+    ...(Array.isArray(draft.planIdAliases) ? draft.planIdAliases : []),
+    draft.planId,
+  ].filter(Boolean).map(String)));
+  return {
+    ...draft,
+    id: draft.id || `draft-${draft.planId || stablePlanKey}`,
+    stablePlanKey,
+    planIdAliases: aliases,
+    lastUpdated: draft.lastUpdated || String(fallbackUpdatedAt || new Date().toISOString()),
+  };
+}
+
+async function migrateLegacyWorkoutDrafts(db: Db): Promise<void> {
+  const legacyDocs: any[] = await db.collection('drafts')
+    .find({ type: 'active_workout' })
+    .toArray();
+
+  for (const legacyDoc of legacyDocs) {
+    if (!legacyDoc?.data?.planId && !legacyDoc?.data?.planTitle) continue;
+
+    const legacy = normalizeWorkoutDraft(legacyDoc.data, legacyDoc.updatedAt);
+    const existing: any = await db.collection('drafts').findOne({
+      type: 'workout_draft',
+      $or: [
+        { planId: legacy.planId },
+        { 'data.planId': legacy.planId },
+        { 'data.planIdAliases': legacy.planId },
+        { stablePlanKey: legacy.stablePlanKey },
+        { 'data.stablePlanKey': legacy.stablePlanKey },
+      ],
+    });
+
+    let chosen = legacy;
+    if (existing?.data) {
+      const current = normalizeWorkoutDraft(existing.data, existing.updatedAt);
+      // Prefer the draft with the most actual workout progress. This specifically protects
+      // historical drafts such as 9/12 from being replaced by a newly-created 0/12 shell.
+      if (draftActivityScore(current) > draftActivityScore(legacy)) chosen = current;
+      chosen = normalizeWorkoutDraft({
+        ...chosen,
+        id: current.id || chosen.id,
+        planId: current.planId || chosen.planId,
+        planTitle: current.planTitle || chosen.planTitle,
+        planIdAliases: Array.from(new Set([...(current.planIdAliases || []), ...(legacy.planIdAliases || []), current.planId, legacy.planId].filter(Boolean))),
+      });
+    }
+
+    await db.collection('drafts').updateOne(
+      existing?._id ? { _id: existing._id } : { type: 'workout_draft', 'data.id': chosen.id },
+      { $set: { type: 'workout_draft', planId: chosen.planId, stablePlanKey: chosen.stablePlanKey, data: chosen, updatedAt: chosen.lastUpdated } },
+      { upsert: !existing?._id },
+    );
+
+    await db.collection('drafts').deleteOne({ _id: legacyDoc._id });
+  }
+}
+
 function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -163,6 +255,23 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ success: true, alreadyApplied: false, migrationId: REHAB_MIGRATION_ID });
   }
 
+  if (path === '/api/migrations/cleanup-orphan-logs' && method === 'POST') {
+    const sessions: any[] = await db.collection('sessions').find({}, { projection: { entries: 1 } }).toArray();
+    const referencedIds = new Set<string>();
+    for (const session of sessions) {
+      if (!Array.isArray(session?.entries)) continue;
+      for (const entry of session.entries) {
+        if (entry?.id) referencedIds.add(String(entry.id));
+      }
+    }
+
+    const filter = referencedIds.size
+      ? { id: { $nin: Array.from(referencedIds) } }
+      : { id: { $exists: true } };
+    const result = await db.collection('logs').deleteMany(filter as any);
+    return json({ success: true, deleted: result.deletedCount, referenced: referencedIds.size });
+  }
+
   if (path === '/api/sync' && method === 'POST') {
     const body = await bodyJson(request);
     const { exercises = [], plans = [], logs = [], sessions = [] } = body || {};
@@ -190,6 +299,46 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (!body?.id) return json({ error: 'Exercise and id are required' }, 400);
     const exercise = clean(body);
     await db.collection('exercises').updateOne({ id: exercise.id }, { $set: exercise }, { upsert: true });
+
+    // Keep copied exercise metadata in plans and active drafts in sync with the library.
+    // This means changing e.g. the title in the exercise library is reflected everywhere.
+    const sharedFields: Record<string, any> = {
+      name: exercise.name,
+      description: exercise.description,
+      imageUrl: exercise.imageUrl ?? null,
+      imagePosition: exercise.imagePosition ?? null,
+      videoUrl: exercise.videoUrl ?? null,
+      targetArea: exercise.targetArea ?? null,
+      categories: Array.isArray(exercise.categories) ? exercise.categories : undefined,
+      trackingMode: exercise.trackingMode ?? 'sets_reps_weight',
+      durationSeconds: exercise.defaultDurationSeconds ?? null,
+      rounds: exercise.defaultRounds ?? null,
+      restSeconds: exercise.restSeconds ?? null,
+      scoreLabel: exercise.scoreLabel ?? null,
+      scoreUnit: exercise.scoreUnit ?? null,
+      lowerScoreIsBetter: exercise.lowerScoreIsBetter ?? null,
+      scorePerSide: exercise.scorePerSide ?? null,
+    };
+    const planSet: Record<string, any> = {};
+    const draftSet: Record<string, any> = {};
+    for (const [key, value] of Object.entries(sharedFields)) {
+      if (value === undefined) continue;
+      planSet[`exercises.$[item].${key}`] = value;
+      draftSet[`data.exercises.$[item].${key}`] = value;
+    }
+    if (Object.keys(planSet).length) {
+      await db.collection('plans').updateMany(
+        { 'exercises.exerciseId': exercise.id },
+        { $set: planSet },
+        { arrayFilters: [{ 'item.exerciseId': exercise.id }] },
+      );
+      await db.collection('drafts').updateMany(
+        { 'data.exercises.exerciseId': exercise.id },
+        { $set: draftSet, $currentDate: { updatedAt: true } },
+        { arrayFilters: [{ 'item.exerciseId': exercise.id }] },
+      );
+    }
+
     return json({ success: true, exercise, mode: 'mongodb' });
   }
   const exerciseDelete = path.match(/^\/api\/exercises\/([^/]+)$/);
@@ -247,68 +396,145 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   const sessionDelete = path.match(/^\/api\/sessions\/([^/]+)$/);
   if (sessionDelete && method === 'DELETE') {
     const id = decodeURIComponent(sessionDelete[1]);
+    const session: any = await db.collection('sessions').findOne({ id });
+    const entryIds = Array.isArray(session?.entries)
+      ? session.entries.map((entry: any) => entry?.id).filter(Boolean)
+      : [];
+    if (entryIds.length) {
+      await db.collection('logs').deleteMany({ id: { $in: entryIds } });
+    }
     await db.collection('sessions').deleteOne({ id });
-    return json({ success: true, id, mode: 'mongodb' });
+    return json({ success: true, id, deletedLogEntries: entryIds.length, mode: 'mongodb' });
   }
 
-  // Multiple independent workout drafts. A draft is keyed by its stable draft.id, and each plan
-  // normally has one current draft. This lets the user pause one workout and start another.
+  // Multiple independent workout drafts. Legacy single-draft documents are migrated lazily
+  // the next time the app asks for drafts, so existing progress survives app upgrades.
   if (path === '/api/drafts' && method === 'GET') {
+    await migrateLegacyWorkoutDrafts(db);
     const docs: any[] = await db.collection('drafts')
       .find({ type: 'workout_draft' }, { projection: { _id: 0, data: 1, updatedAt: 1 } })
       .sort({ updatedAt: -1 })
       .toArray();
-    return json({ drafts: docs.map((d) => d.data).filter(Boolean) });
+    return json({ drafts: docs.map((d) => normalizeWorkoutDraft(d.data, d.updatedAt)).filter(Boolean) });
   }
   if (path === '/api/drafts' && method === 'POST') {
+    await migrateLegacyWorkoutDrafts(db);
     const body = await bodyJson(request);
     const draft = body?.draft;
     if (!draft?.planId) return json({ error: 'Draft og planId er påkrævet' }, 400);
-    const normalized = {
-      ...draft,
-      id: draft.id || `draft-${draft.planId}`,
-      lastUpdated: draft.lastUpdated || new Date().toISOString(),
-    };
+    const normalized = normalizeWorkoutDraft({ ...draft, lastUpdated: new Date().toISOString() });
+
+    const existing: any = await db.collection('drafts').findOne({
+      type: 'workout_draft',
+      $or: [
+        { 'data.id': normalized.id },
+        { planId: normalized.planId },
+        { 'data.planIdAliases': normalized.planId },
+        { stablePlanKey: normalized.stablePlanKey },
+        { 'data.stablePlanKey': normalized.stablePlanKey },
+      ],
+    });
+
+    if (existing?.data) {
+      const previous = normalizeWorkoutDraft(existing.data, existing.updatedAt);
+      const previousCompleted = draftCompletedCount(previous);
+      const incomingCompleted = draftCompletedCount(normalized);
+      // An untouched freshly-opened plan must never wipe a real in-progress workout.
+      // Starting over is still possible because the UI explicitly deletes the old draft first.
+      if (previousCompleted > 0 && incomingCompleted === 0 && !body?.allowProgressReset) {
+        return json({ success: true, draft: previous, preservedPreviousProgress: true, mode: 'mongodb' });
+      }
+      normalized.planIdAliases = Array.from(new Set([
+        ...(previous.planIdAliases || []),
+        ...(normalized.planIdAliases || []),
+        previous.planId,
+        normalized.planId,
+      ].filter(Boolean)));
+      normalized.id = previous.id || normalized.id;
+    }
+
     await db.collection('drafts').updateOne(
-      { type: 'workout_draft', 'data.id': normalized.id },
-      { $set: { type: 'workout_draft', planId: normalized.planId, data: normalized, updatedAt: normalized.lastUpdated } },
-      { upsert: true },
+      existing?._id ? { _id: existing._id } : { type: 'workout_draft', 'data.id': normalized.id },
+      { $set: { type: 'workout_draft', planId: normalized.planId, stablePlanKey: normalized.stablePlanKey, data: normalized, updatedAt: normalized.lastUpdated } },
+      { upsert: !existing?._id },
     );
     return json({ success: true, draft: normalized, mode: 'mongodb' });
   }
   const draftByPlan = path.match(/^\/api\/drafts\/plan\/([^/]+)$/);
   if (draftByPlan && method === 'GET') {
+    await migrateLegacyWorkoutDrafts(db);
     const planId = decodeURIComponent(draftByPlan[1]);
-    const doc: any = await db.collection('drafts').findOne(
-      { type: 'workout_draft', planId },
-      { projection: { _id: 0, data: 1 } },
-    );
-    return json({ draft: doc?.data || null });
+    const title = url.searchParams.get('title') || '';
+    const stablePlanKey = normalizeKey(title);
+    const ors: any[] = [
+      { planId },
+      { 'data.planId': planId },
+      { 'data.planIdAliases': planId },
+    ];
+    if (stablePlanKey) {
+      ors.push({ stablePlanKey });
+      ors.push({ 'data.stablePlanKey': stablePlanKey });
+    }
+    const docs: any[] = await db.collection('drafts')
+      .find({ type: 'workout_draft', $or: ors })
+      .sort({ updatedAt: -1 })
+      .toArray();
+    const best = docs
+      .map((d) => normalizeWorkoutDraft(d.data, d.updatedAt))
+      .sort((a, b) => draftActivityScore(b) - draftActivityScore(a))[0] || null;
+    return json({ draft: best });
   }
   const draftDelete = path.match(/^\/api\/drafts\/([^/]+)$/);
   if (draftDelete && method === 'DELETE') {
     const id = decodeURIComponent(draftDelete[1]);
-    await db.collection('drafts').deleteOne({ type: 'workout_draft', 'data.id': id });
+    const doc: any = await db.collection('drafts').findOne({ type: 'workout_draft', 'data.id': id });
+    if (doc?.data) {
+      const normalized = normalizeWorkoutDraft(doc.data, doc.updatedAt);
+      await db.collection('drafts').deleteMany({
+        type: 'workout_draft',
+        $or: [
+          { 'data.id': id },
+          { stablePlanKey: normalized.stablePlanKey },
+          { 'data.stablePlanKey': normalized.stablePlanKey },
+        ],
+      });
+    } else {
+      await db.collection('drafts').deleteOne({ type: 'workout_draft', 'data.id': id });
+    }
     return json({ success: true, id, mode: 'mongodb' });
   }
 
   // Legacy endpoint kept for compatibility with older deployed clients.
   if (path === '/api/active-draft' && method === 'GET') {
-    const doc: any = await db.collection('drafts').findOne(
-      { type: 'workout_draft' },
-      { projection: { _id: 0, data: 1 }, sort: { updatedAt: -1 } as any },
-    );
-    return json({ draft: doc?.data || null });
+    await migrateLegacyWorkoutDrafts(db);
+    const docs: any[] = await db.collection('drafts')
+      .find({ type: 'workout_draft' }, { projection: { _id: 0, data: 1, updatedAt: 1 } })
+      .sort({ updatedAt: -1 })
+      .toArray();
+    const best = docs.map((d) => normalizeWorkoutDraft(d.data, d.updatedAt))[0] || null;
+    return json({ draft: best });
   }
   if (path === '/api/active-draft' && method === 'POST') {
+    await migrateLegacyWorkoutDrafts(db);
     const body = await bodyJson(request);
     const draft = body?.draft;
     if (!draft?.planId) return json({ error: 'Draft og planId er påkrævet' }, 400);
-    const normalized = { ...draft, id: draft.id || `draft-${draft.planId}` };
+    const normalized = normalizeWorkoutDraft({ ...draft, lastUpdated: new Date().toISOString() });
+    const existing: any = await db.collection('drafts').findOne({
+      type: 'workout_draft',
+      $or: [
+        { 'data.id': normalized.id },
+        { planId: normalized.planId },
+        { stablePlanKey: normalized.stablePlanKey },
+      ],
+    });
+    if (existing?.data && draftCompletedCount(existing.data) > 0 && draftCompletedCount(normalized) === 0) {
+      return json({ success: true, preservedPreviousProgress: true, mode: 'mongodb' });
+    }
     await db.collection('drafts').updateOne(
-      { type: 'workout_draft', 'data.id': normalized.id },
-      { $set: { type: 'workout_draft', planId: normalized.planId, data: normalized, updatedAt: new Date().toISOString() } },
-      { upsert: true },
+      existing?._id ? { _id: existing._id } : { type: 'workout_draft', 'data.id': normalized.id },
+      { $set: { type: 'workout_draft', planId: normalized.planId, stablePlanKey: normalized.stablePlanKey, data: normalized, updatedAt: normalized.lastUpdated } },
+      { upsert: !existing?._id },
     );
     return json({ success: true, mode: 'mongodb' });
   }

@@ -78,6 +78,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
   const [showPartialModal, setShowPartialModal] = useState(false);
   const [ongoingDrafts, setOngoingDrafts] = useState<WorkoutDraft[]>([]);
+  const [showDraftList, setShowDraftList] = useState(false);
 
   // Modals
   const [inspectExercise, setInspectExercise] = useState<Exercise | null>(null);
@@ -169,7 +170,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       }
 
       try {
-        const draft = await StorageService.getWorkoutDraftForPlan(activePlanId);
+        const draft = await StorageService.getWorkoutDraftForPlan(activePlanId, currentPlan.title);
         if (draft?.exercises?.length) {
           const refreshed = draft.exercises.map((pe) => {
             const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
@@ -214,6 +215,32 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     onChangePlan(newPlanId);
   };
 
+  const openDraft = async (draft: WorkoutDraft) => {
+    setShowDraftList(false);
+    if (draft.planId !== activePlanId) {
+      await handleSwitchPlan(draft.planId);
+      return;
+    }
+
+    const refreshed = draft.exercises.map((pe) => {
+      const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+      return {
+        ...pe,
+        imageUrl: baseEx?.imageUrl || pe.imageUrl,
+        imagePosition: baseEx?.imagePosition || pe.imagePosition,
+      };
+    });
+    setSessionExercises(refreshed);
+    setSessionSeconds(draft.sessionSeconds || 0);
+    setWorkoutDate(draft.workoutDate || new Date().toISOString().split('T')[0]);
+    setTimers(draft.timers || {});
+    setIsDraftLoaded(true);
+    const doneCount = refreshed.filter((e) => e.isCompleted).length;
+    const updatedTime = new Date(draft.lastUpdated).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    setDraftBannerMessage(`Kladde valgt: ${doneCount} af ${refreshed.length} øvelser udført · gemt ${updatedTime}.`);
+    setDraftBannerVisible(true);
+  };
+
   // Overall session timer tick
   useEffect(() => {
     if (isSessionTimerRunning) {
@@ -256,14 +283,29 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
       const hasActivity =
         seconds > 0 ||
-        exercisesToSave.some(
-          (e) =>
+        Object.values(timers).some((timer) => Number(timer?.seconds || 0) > 0) ||
+        exercisesToSave.some((e) => {
+          const original = currentPlan.exercises.find((base) => base.id === e.id || base.exerciseId === e.exerciseId);
+          const changedFromPlan = original
+            ? e.sets !== original.sets ||
+              e.reps !== original.reps ||
+              e.weightKg !== original.weightKg ||
+              e.separateLegs !== original.separateLegs ||
+              e.leftLegWeightKg !== original.leftLegWeightKg ||
+              e.leftLegReps !== original.leftLegReps ||
+              e.rightLegWeightKg !== original.rightLegWeightKg ||
+              e.rightLegReps !== original.rightLegReps ||
+              e.durationSeconds !== original.durationSeconds ||
+              e.rounds !== original.rounds
+            : false;
+          return Boolean(
             e.isCompleted ||
-            (e.notes && e.notes.length > 0) ||
-            (e.weightKg !== undefined && e.weightKg > 0) ||
-            (e.leftLegWeightKg !== undefined && e.leftLegWeightKg > 0) ||
-            (e.rightLegWeightKg !== undefined && e.rightLegWeightKg > 0)
-        );
+            (e.notes && e.notes.trim().length > 0) ||
+            (Array.isArray(e.scoreResults) && e.scoreResults.length > 0) ||
+            Number(e.activeTimerSeconds || 0) > 0 ||
+            changedFromPlan
+          );
+        });
 
       if (!hasActivity) return;
 
@@ -271,6 +313,14 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         id: `draft-${currentPlan.id}`,
         planId: currentPlan.id,
         planTitle: currentPlan.title,
+        stablePlanKey: currentPlan.title
+          .toLocaleLowerCase('da-DK')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 120),
+        planIdAliases: [currentPlan.id],
         workoutDate,
         sessionSeconds: seconds,
         lastUpdated: new Date().toISOString(),
@@ -279,8 +329,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       };
 
       try {
-        await StorageService.saveWorkoutDraft(draft);
-        setOngoingDrafts((prev) => [draft, ...prev.filter((d) => d.id !== draft.id)]);
+        const persistedDraft = await StorageService.saveWorkoutDraft(draft);
+        setOngoingDrafts((prev) => [persistedDraft, ...prev.filter((d) => d.id !== persistedDraft.id)]);
         setLastSavedTime(
           new Date().toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })
         );
@@ -543,24 +593,74 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
   return (
     <div className="space-y-6">
-      {ongoingDrafts.filter((d) => d.planId !== activePlanId).length > 0 && (
-        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-slate-700 shadow-xs">
-          <div className="flex items-start gap-3">
-            <BookmarkCheck className="w-5 h-5 text-slate-500 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="font-bold text-xs text-slate-800">Du har {ongoingDrafts.filter((d) => d.planId !== activePlanId).length} anden uafsluttet træning</div>
-              <p className="text-[11px] text-slate-500 mt-0.5">De ligger neutralt som kladder. Du kan starte eller fortsætte et andet program uden at overskrive dem.</p>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {ongoingDrafts.filter((d) => d.planId !== activePlanId).map((draft) => (
-                  <button key={draft.id} type="button" onClick={() => handleSwitchPlan(draft.planId)} className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-blue-300 hover:text-blue-700 text-[11px] font-semibold">
-                    Fortsæt: {draft.planTitle}
-                  </button>
-                ))}
+      {ongoingDrafts.length > 0 && (
+        <div className="rounded-2xl bg-slate-50 border border-slate-200 text-slate-700 shadow-xs overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowDraftList((v) => !v)}
+            className="w-full p-3.5 sm:p-4 flex items-center justify-between gap-3 text-left hover:bg-slate-100/70 transition-colors"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <BookmarkCheck className="w-5 h-5 text-slate-500 shrink-0" />
+              <div className="min-w-0">
+                <div className="font-bold text-xs text-slate-800">
+                  {ongoingDrafts.length === 1 ? '1 gemt kladde' : `${ongoingDrafts.length} gemte kladder`}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                  Vælg selv hvilket uafsluttet træningspas du vil fortsætte.
+                </p>
               </div>
             </div>
-          </div>
+            <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${showDraftList ? 'rotate-90' : ''}`} />
+          </button>
+
+          {showDraftList && (
+            <div className="border-t border-slate-200 p-2 sm:p-3 space-y-2 bg-white">
+              {[...ongoingDrafts]
+                .sort((a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime())
+                .map((draft) => {
+                  const done = draft.exercises?.filter((e) => e.isCompleted).length || 0;
+                  const total = draft.exercises?.length || 0;
+                  const pct = total ? Math.round((done / total) * 100) : 0;
+                  const updated = new Date(draft.lastUpdated).toLocaleString('da-DK', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  });
+                  return (
+                    <button
+                      key={draft.id}
+                      type="button"
+                      onClick={() => openDraft(draft)}
+                      className="w-full rounded-xl border border-slate-200 p-3 flex items-center justify-between gap-3 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-sm text-slate-900 truncate">{draft.planTitle}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                          <span>{done}/{total} øvelser</span>
+                          <span>·</span>
+                          <span>{pct}%</span>
+                          <span>·</span>
+                          <span>{draft.workoutDate ? new Date(`${draft.workoutDate}T12:00:00`).toLocaleDateString('da-DK') : 'Ingen dato'}</span>
+                          <span>·</span>
+                          <span>gemt {updated}</span>
+                        </div>
+                        <div className="mt-2 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                      <span className="shrink-0 px-2.5 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-bold">
+                        Åbn
+                      </span>
+                    </button>
+                  );
+                })}
+            </div>
+          )}
         </div>
       )}
+
 
       {/* 1. RESUME / ONGOING DRAFT REASSURANCE BANNER */}
       {draftBannerVisible && draftBannerMessage && (

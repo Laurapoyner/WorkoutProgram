@@ -22,6 +22,7 @@ export interface Exercise {
   imagePosition?: ImagePosition;
   videoUrl?: string;
   targetArea?: string;
+  categories?: string[];
   defaultSets: number;
   defaultReps: string;
   defaultWeightKg?: number;
@@ -47,6 +48,7 @@ export interface PlanExercise {
   imagePosition?: ImagePosition;
   videoUrl?: string;
   targetArea?: string;
+  categories?: string[];
   sets: number;
   reps: string;
   weightKg?: number;
@@ -128,6 +130,10 @@ export interface WorkoutDraft {
   id: string;
   planId: string;
   planTitle: string;
+  /** Stable identity used to reconnect a draft if a plan id changes between deployments. */
+  stablePlanKey?: string;
+  /** Previous ids this plan/draft has been known under. */
+  planIdAliases?: string[];
   workoutDate: string;
   sessionSeconds: number;
   lastUpdated: string;

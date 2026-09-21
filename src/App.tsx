@@ -254,6 +254,29 @@ export default function App() {
         updatedExercises = [savedEx, ...exercises];
       }
       setExercises(updatedExercises);
+      // Exercise metadata is canonical in the library. Keep any plan copies in sync immediately
+      // while preserving plan-specific sets/reps/weights. The Worker performs the same cascade in MongoDB.
+      setPlans((prevPlans) => prevPlans.map((plan) => ({
+        ...plan,
+        exercises: plan.exercises.map((pe) => pe.exerciseId === savedEx.id ? {
+          ...pe,
+          name: savedEx.name,
+          description: savedEx.description,
+          imageUrl: savedEx.imageUrl,
+          imagePosition: savedEx.imagePosition,
+          videoUrl: savedEx.videoUrl,
+          targetArea: savedEx.targetArea,
+          categories: savedEx.categories,
+          trackingMode: savedEx.trackingMode || pe.trackingMode,
+          durationSeconds: savedEx.defaultDurationSeconds ?? pe.durationSeconds,
+          rounds: savedEx.defaultRounds ?? pe.rounds,
+          restSeconds: savedEx.restSeconds ?? pe.restSeconds,
+          scoreLabel: savedEx.scoreLabel ?? pe.scoreLabel,
+          scoreUnit: savedEx.scoreUnit ?? pe.scoreUnit,
+          lowerScoreIsBetter: savedEx.lowerScoreIsBetter ?? pe.lowerScoreIsBetter,
+          scorePerSide: savedEx.scorePerSide ?? pe.scorePerSide,
+        } : pe),
+      })));
       showToast(`Øvelsen "${savedEx.name}" blev gemt i MongoDB Atlas!`);
     } catch (err: any) {
       console.error('Fejl ved gemning af øvelse:', err);
@@ -301,9 +324,12 @@ export default function App() {
 
   const handleDeleteSession = async (sessionId: string) => {
     try {
+      const session = sessions.find((s) => s.id === sessionId);
+      const entryIds = new Set((session?.entries || []).map((entry) => entry.id));
       await StorageService.deleteCompletedSession(sessionId);
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      showToast('Træningspasset blev slettet fra MongoDB');
+      setLogs((prev) => prev.filter((entry) => !entryIds.has(entry.id)));
+      showToast('Træningspasset og dets historiske registreringer blev slettet');
     } catch (err: any) {
       showToast(`Træningspasset blev ikke slettet: ${err.message || 'databasefejl'}`);
     }

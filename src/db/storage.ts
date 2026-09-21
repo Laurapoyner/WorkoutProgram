@@ -48,6 +48,9 @@ export const StorageService = {
 
     // Idempotent migration: adds the ExorLive images, LSI test plan and historical test data once.
     await apiJson('/api/migrations/rehab-2026', { method: 'POST' });
+
+    // Remove orphan exercise logs left behind by older versions when a workout session was deleted.
+    await apiJson('/api/migrations/cleanup-orphan-logs', { method: 'POST' });
   },
 
   async getExercises(): Promise<Exercise[]> {
@@ -115,17 +118,19 @@ export const StorageService = {
     return data.drafts || [];
   },
 
-  async getWorkoutDraftForPlan(planId: string): Promise<WorkoutDraft | null> {
-    const data = await apiJson<{ draft: WorkoutDraft | null }>(`/api/drafts/plan/${encodeURIComponent(planId)}`);
+  async getWorkoutDraftForPlan(planId: string, planTitle?: string): Promise<WorkoutDraft | null> {
+    const titleQuery = planTitle ? `?title=${encodeURIComponent(planTitle)}` : '';
+    const data = await apiJson<{ draft: WorkoutDraft | null }>(`/api/drafts/plan/${encodeURIComponent(planId)}${titleQuery}`);
     return data.draft || null;
   },
 
-  async saveWorkoutDraft(draft: WorkoutDraft): Promise<void> {
-    await apiJson('/api/drafts', {
+  async saveWorkoutDraft(draft: WorkoutDraft): Promise<WorkoutDraft> {
+    const data = await apiJson<{ draft?: WorkoutDraft }>('/api/drafts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ draft }),
     });
+    return data.draft || draft;
   },
 
   async deleteWorkoutDraft(draftId: string): Promise<void> {

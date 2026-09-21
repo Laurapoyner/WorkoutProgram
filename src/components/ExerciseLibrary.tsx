@@ -16,6 +16,7 @@ import { AddExerciseModal } from './AddExerciseModal';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
 import { ImageUploadModal } from './ImageUploadModal';
 import { getExerciseImageStyle } from '../utils/imageStyle';
+import { getExerciseTags } from '../utils/exerciseTags';
 
 interface ExerciseLibraryProps {
   exercises: Exercise[];
@@ -37,13 +38,11 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
   const [selectedExerciseForImage, setSelectedExerciseForImage] = useState<Exercise | null>(null);
   const [selectedExerciseForEdit, setSelectedExerciseForEdit] = useState<Exercise | null>(null);
 
-  // Derive unique target areas for filtering
+  // Derive clean tags for filtering. Legacy values like "Læg & Knæ" are split automatically.
   const targetAreas = useMemo(() => {
     const areas = new Set<string>();
-    exercises.forEach((ex) => {
-      if (ex.targetArea) areas.add(ex.targetArea);
-    });
-    return Array.from(areas);
+    exercises.forEach((ex) => getExerciseTags(ex).forEach((tag) => areas.add(tag)));
+    return Array.from(areas).sort((a, b) => a.localeCompare(b, 'da'));
   }, [exercises]);
 
   const filteredExercises = useMemo(() => {
@@ -51,10 +50,10 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
       const matchesSearch =
         ex.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         ex.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (ex.targetArea && ex.targetArea.toLowerCase().includes(searchQuery.toLowerCase()));
+        getExerciseTags(ex).some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()));
 
       const matchesArea =
-        selectedArea === 'alle' || ex.targetArea?.toLowerCase() === selectedArea.toLowerCase();
+        selectedArea === 'alle' || getExerciseTags(ex).some((tag) => tag.toLowerCase() === selectedArea.toLowerCase());
 
       return matchesSearch && matchesArea;
     });
@@ -109,7 +108,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
             <span className="text-xs text-slate-500 flex items-center gap-1 shrink-0 pl-1">
               <Filter className="w-3.5 h-3.5" />
-              Område:
+              Tags:
             </span>
             <button
               onClick={() => setSelectedArea('alle')}
@@ -165,10 +164,15 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                 )}
 
                 {/* Badge for focus area */}
-                <div className="absolute top-3 left-3 flex flex-wrap gap-1">
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/95 text-slate-800 shadow-xs backdrop-blur-xs">
-                    {exercise.targetArea || 'Knæ & Ben'}
-                  </span>
+                <div className="absolute top-3 left-3 flex flex-wrap gap-1 max-w-[85%]">
+                  {getExerciseTags(exercise).map((tag) => (
+                    <span key={tag} className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/95 text-slate-800 shadow-xs backdrop-blur-xs">
+                      {tag}
+                    </span>
+                  ))}
+                  {getExerciseTags(exercise).length === 0 && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/95 text-slate-800 shadow-xs backdrop-blur-xs">Generelt</span>
+                  )}
                   {exercise.isUnilateralByDefault && (
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white shadow-xs">
                       Etbens

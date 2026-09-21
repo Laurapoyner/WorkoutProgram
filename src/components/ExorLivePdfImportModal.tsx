@@ -17,6 +17,7 @@ type ParsedExercise = {
   videoUrl?: string;
   imageDataUrl?: string;
 };
+import { splitLegacyTargetArea } from '../utils/exerciseTags';
 
 interface Props {
   exercises: Exercise[];
@@ -187,6 +188,7 @@ export const ExorLivePdfImportModal: React.FC<Props> = ({ exercises, onSaveExerc
           imagePosition: imageUrl ? { x: 50, y: 50, scale: 1 } : undefined,
           videoUrl: item.videoUrl || existing?.videoUrl,
           targetArea: existing?.targetArea || inferTargetArea(item.name),
+          categories: existing?.categories || splitLegacyTargetArea(existing?.targetArea || inferTargetArea(item.name)),
           defaultSets: item.sets,
           defaultReps: item.reps,
           defaultWeightKg: item.weightKg ?? existing?.defaultWeightKg,
@@ -208,6 +210,7 @@ export const ExorLivePdfImportModal: React.FC<Props> = ({ exercises, onSaveExerc
         imagePosition: ex.imagePosition,
         videoUrl: ex.videoUrl,
         targetArea: ex.targetArea,
+        categories: ex.categories,
         sets: ex.defaultSets,
         reps: ex.defaultReps,
         weightKg: ex.defaultWeightKg,

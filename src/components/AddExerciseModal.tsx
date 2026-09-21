@@ -4,6 +4,7 @@ import { Exercise, ImagePosition, ExerciseTrackingMode } from '../types';
 import { StorageService } from '../db/storage';
 import { ImageFocalAdjuster } from './ImageFocalAdjuster';
 import { compressImageFile } from '../utils/imageCompressor';
+import { getExerciseTags, normalizeTags, STANDARD_EXERCISE_TAGS } from '../utils/exerciseTags';
 
 interface AddExerciseModalProps {
   onClose: () => void;
@@ -13,15 +14,6 @@ interface AddExerciseModalProps {
   exerciseToEdit?: Exercise | null;
 }
 
-const DEFAULT_CATEGORIES = [
-  'Knæ & Lår',
-  'Hofte & Bækken',
-  'Læg & Ankel',
-  'Core & Ryg',
-  'Overkrop & Skulder',
-  'Balance & Stabilitet',
-  'Kondition & Opvarmning',
-];
 
 export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
   onClose,
@@ -33,20 +25,18 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
   const [name, setName] = useState(exerciseToEdit?.name || '');
   const [description, setDescription] = useState(exerciseToEdit?.description || '');
 
-  // Extract unique categories from defaults, exercises and existingCategories
+  // Tags replace the old single combined category such as "Læg & Knæ".
+  // Existing data is converted on the fly so older exercises continue to work.
   const allCategories = useMemo(() => {
-    const set = new Set<string>(DEFAULT_CATEGORIES);
-    existingCategories.forEach((cat) => {
-      if (cat && cat.trim()) set.add(cat.trim());
-    });
-    exercises.forEach((ex) => {
-      if (ex.targetArea && ex.targetArea.trim()) set.add(ex.targetArea.trim());
-    });
-    return Array.from(set);
+    const set = new Set<string>(STANDARD_EXERCISE_TAGS);
+    existingCategories.forEach((cat) => normalizeTags([cat]).forEach((tag) => set.add(tag)));
+    exercises.forEach((ex) => getExerciseTags(ex).forEach((tag) => set.add(tag)));
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'da'));
   }, [exercises, existingCategories]);
 
-  const [selectedCategory, setSelectedCategory] = useState<string>(exerciseToEdit?.targetArea || 'Knæ & Lår');
-  const [isCustomCategory, setIsCustomCategory] = useState(false);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(
+    exerciseToEdit ? getExerciseTags(exerciseToEdit) : ['Knæ']
+  );
   const [customCategoryText, setCustomCategoryText] = useState('');
 
   const [defaultSets, setDefaultSets] = useState(exerciseToEdit?.defaultSets || 3);
@@ -118,14 +108,15 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
     e.preventDefault();
     if (!name.trim()) return;
 
-    const finalTargetArea =
-      (isCustomCategory ? customCategoryText.trim() : selectedCategory.trim()) || 'Knæ & Lår';
+    const categories = normalizeTags(selectedCategories.length ? selectedCategories : ['Generelt']);
+    const finalTargetArea = categories[0] || 'Generelt';
 
     const newExercise: Exercise = {
       id: exerciseToEdit?.id || `ex-custom-${Date.now()}`,
       name: name.trim(),
       description: description.trim(),
       targetArea: finalTargetArea,
+      categories,
       defaultSets: Number(defaultSets) || 1,
       defaultReps: defaultReps.trim() || '10-15',
       defaultWeightKg: trackingMode === 'sets_reps_weight' && defaultWeightKg !== '' ? Number(defaultWeightKg) : undefined,
@@ -319,86 +310,67 @@ export const AddExerciseModal: React.FC<AddExerciseModalProps> = ({
           {/* Target area & video url */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
                 <span className="flex items-center gap-1.5">
                   <Layers className="w-3.5 h-3.5 text-blue-600" />
-                  Fokusområde / Muskelgruppe
-                </span>
-                <span className="text-[10px] text-blue-600 font-semibold normal-case">
-                  Vælg fra liste
+                  Kategorier / tags
                 </span>
               </label>
-
-              {/* Category Dropdown with existing categories */}
-              <select
-                id="exercise-target-area-select"
-                value={isCustomCategory ? '__custom__' : selectedCategory}
-                onChange={(e) => {
-                  if (e.target.value === '__custom__') {
-                    setIsCustomCategory(true);
-                  } else {
-                    setIsCustomCategory(false);
-                    setSelectedCategory(e.target.value);
-                  }
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 font-medium"
-              >
-                <optgroup label="Eksisterende kategorier">
-                  {allCategories.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </optgroup>
-                <option value="__custom__">➕ Opret ny kategori (skriv selv)...</option>
-              </select>
-
-              {/* Custom category input if selected */}
-              {isCustomCategory && (
-                <div className="mt-2 animate-in fade-in duration-200">
-                  <input
-                    type="text"
-                    autoFocus
-                    value={customCategoryText}
-                    onChange={(e) => setCustomCategoryText(e.target.value)}
-                    placeholder="Indtast navnet på den nye kategori..."
-                    className="w-full px-3 py-2 rounded-xl bg-blue-50/50 border border-blue-400 text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-100 placeholder-slate-400"
-                  />
-                  <div className="flex items-center justify-between mt-1 px-1">
-                    <span className="text-[10px] text-slate-500">
-                      Denne nye kategori bliver også tilgængelig i fremtidige programmer.
-                    </span>
+              <p className="text-[11px] text-slate-500 mb-2">
+                Vælg gerne flere. Fx kan en øvelse både have <strong>Knæ</strong> og <strong>Læg</strong>.
+              </p>
+              <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 rounded-xl bg-slate-50 border border-slate-200">
+                {allCategories.map((cat) => {
+                  const active = selectedCategories.includes(cat);
+                  return (
                     <button
                       type="button"
-                      onClick={() => setIsCustomCategory(false)}
-                      className="text-[10px] text-blue-600 hover:underline font-medium"
+                      key={cat}
+                      onClick={() => setSelectedCategories((prev) =>
+                        prev.includes(cat) ? prev.filter((x) => x !== cat) : [...prev, cat]
+                      )}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
+                        active
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:text-blue-700'
+                      }`}
                     >
-                      Brug liste igen
+                      {cat}
                     </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Quick suggestion chips */}
-              <div className="mt-2 flex flex-wrap gap-1">
-                {allCategories.slice(0, 5).map((cat) => (
-                  <button
-                    type="button"
-                    key={cat}
-                    onClick={() => {
-                      setIsCustomCategory(false);
-                      setSelectedCategory(cat);
-                    }}
-                    className={`px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors ${
-                      !isCustomCategory && selectedCategory === cat
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    {cat}
-                  </button>
-                ))}
+                  );
+                })}
               </div>
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="text"
+                  value={customCategoryText}
+                  onChange={(e) => setCustomCategoryText(e.target.value)}
+                  placeholder="Tilføj nyt tag..."
+                  className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-300 text-slate-900 text-xs focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const [tag] = normalizeTags([customCategoryText]);
+                      if (tag) setSelectedCategories((prev) => prev.includes(tag) ? prev : [...prev, tag]);
+                      setCustomCategoryText('');
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const [tag] = normalizeTags([customCategoryText]);
+                    if (tag) setSelectedCategories((prev) => prev.includes(tag) ? prev : [...prev, tag]);
+                    setCustomCategoryText('');
+                  }}
+                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
+                >
+                  Tilføj
+                </button>
+              </div>
+              {selectedCategories.length > 0 && (
+                <div className="mt-2 text-[10px] text-slate-500">Valgt: {selectedCategories.join(' · ')}</div>
+              )}
             </div>
 
             <div>
