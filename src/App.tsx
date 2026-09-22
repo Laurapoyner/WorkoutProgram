@@ -322,6 +322,23 @@ export default function App() {
     showToast(`Genoptager træningspas: "${session.planTitle}"`);
   };
 
+  const handleUpdateSession = async (updatedSession: CompletedSession) => {
+    try {
+      const previous = sessions.find((session) => session.id === updatedSession.id);
+      const previousEntryIds = new Set((previous?.entries || []).map((entry) => entry.id));
+      await StorageService.updateCompletedSession(updatedSession);
+      setSessions((prev) => prev.map((session) => session.id === updatedSession.id ? updatedSession : session));
+      setLogs((prev) => [
+        ...updatedSession.entries,
+        ...prev.filter((entry) => !previousEntryIds.has(entry.id) && !updatedSession.entries.some((updated) => updated.id === entry.id)),
+      ].sort((a, b) => b.timestamp - a.timestamp));
+      showToast('Træningspasset blev opdateret');
+    } catch (err: any) {
+      showToast(`Træningspasset blev ikke opdateret: ${err.message || 'databasefejl'}`);
+      throw err;
+    }
+  };
+
   const handleDeleteSession = async (sessionId: string) => {
     try {
       const session = sessions.find((s) => s.id === sessionId);
@@ -718,6 +735,7 @@ export default function App() {
               onResetToDefaults={handleResetToDefaults}
               onResumeSession={handleResumeSession}
               onDeleteSession={handleDeleteSession}
+              onUpdateSession={handleUpdateSession}
             />
           )}
         </main>

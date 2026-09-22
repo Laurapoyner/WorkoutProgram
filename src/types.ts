@@ -138,6 +138,8 @@ export interface CompletedSession {
   remainingExercises?: PlanExercise[];
   skippedExercises?: SkippedExerciseRecord[];
   notes?: string;
+  warmupType?: string;
+  warmupMinutes?: number;
 }
 
 export interface WorkoutDraft {
@@ -150,6 +152,9 @@ export interface WorkoutDraft {
   planIdAliases?: string[];
   workoutDate: string;
   sessionSeconds: number;
+  notes?: string;
+  warmupType?: string;
+  warmupMinutes?: number;
   lastUpdated: string;
   exercises: PlanExercise[];
   timers?: { [exerciseId: string]: { seconds: number; isRunning: boolean } };

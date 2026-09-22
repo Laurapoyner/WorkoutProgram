@@ -393,6 +393,34 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
     return json({ success: true, session, mode: 'mongodb' });
   }
+  const sessionUpdate = path.match(/^\/api\/sessions\/([^/]+)$/);
+  if (sessionUpdate && method === 'PUT') {
+    const id = decodeURIComponent(sessionUpdate[1]);
+    const body = await bodyJson(request);
+    if (!body || body.id !== id) return json({ error: 'Session-id matcher ikke URL' }, 400);
+
+    const previous: any = await db.collection('sessions').findOne({ id });
+    if (!previous) return json({ error: 'Træningspasset blev ikke fundet' }, 404);
+
+    const session = clean(body);
+    const oldEntryIds = new Set(Array.isArray(previous.entries) ? previous.entries.map((entry: any) => entry?.id).filter(Boolean) : []);
+    const newEntryIds = new Set(Array.isArray(session.entries) ? session.entries.map((entry: any) => entry?.id).filter(Boolean) : []);
+    const removedEntryIds = Array.from(oldEntryIds).filter((entryId) => !newEntryIds.has(entryId));
+
+    await db.collection('sessions').updateOne({ id }, { $set: session });
+    if (removedEntryIds.length) {
+      await db.collection('logs').deleteMany({ id: { $in: removedEntryIds } });
+    }
+    if (Array.isArray(session.entries)) {
+      for (const rawEntry of session.entries) {
+        if (!rawEntry?.id) continue;
+        const entry = clean(rawEntry);
+        await db.collection('logs').updateOne({ id: entry.id }, { $set: entry }, { upsert: true });
+      }
+    }
+    return json({ success: true, session, deletedLogEntries: removedEntryIds.length, mode: 'mongodb' });
+  }
+
   const sessionDelete = path.match(/^\/api\/sessions\/([^/]+)$/);
   if (sessionDelete && method === 'DELETE') {
     const id = decodeURIComponent(sessionDelete[1]);

@@ -62,6 +62,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
   // Overall session timer
   const [sessionSeconds, setSessionSeconds] = useState(0);
+  const [sessionNote, setSessionNote] = useState('');
+  const [warmupType, setWarmupType] = useState('');
+  const [warmupMinutes, setWarmupMinutes] = useState('');
   const [isSessionTimerRunning, setIsSessionTimerRunning] = useState(false);
   const sessionTimerRef = useRef<number | null>(null);
 
@@ -168,6 +171,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         });
         setSessionExercises(mapped);
         setSessionSeconds(resumeSession.durationSeconds || 0);
+        setSessionNote(resumeSession.notes || '');
+        setWarmupType(resumeSession.warmupType || '');
+        setWarmupMinutes(resumeSession.warmupMinutes ? String(resumeSession.warmupMinutes) : '');
         setWorkoutDate(new Date().toISOString().split('T')[0]);
         setDraftBannerMessage(`Genoptaget tidligere pas: ${mapped.filter((e) => e.isCompleted).length} af ${mapped.length} øvelser er allerede registreret.`);
         setDraftBannerVisible(true);
@@ -189,6 +195,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
           });
           setSessionExercises(refreshed);
           setSessionSeconds(draft.sessionSeconds || 0);
+          setSessionNote(draft.notes || '');
+          setWarmupType(draft.warmupType || '');
+          setWarmupMinutes(draft.warmupMinutes ? String(draft.warmupMinutes) : '');
           setWorkoutDate(draft.workoutDate || new Date().toISOString().split('T')[0]);
           setTimers(draft.timers || {});
           const doneCount = refreshed.filter((e) => e.executionStatus === 'completed' || e.isCompleted).length;
@@ -204,6 +213,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
       setSessionExercises(freshExercisesForPlan(currentPlan));
       setSessionSeconds(0);
+      setSessionNote('');
+      setWarmupType('');
+      setWarmupMinutes('');
       setWorkoutDate(new Date().toISOString().split('T')[0]);
       setIsDraftLoaded(true);
     }
@@ -290,6 +302,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
       const hasActivity =
         seconds > 0 ||
+        sessionNote.trim().length > 0 ||
+        warmupType.trim().length > 0 ||
+        Number(warmupMinutes || 0) > 0 ||
         Object.values(timers).some((timer) => Number(timer?.seconds || 0) > 0) ||
         exercisesToSave.some((e) => {
           const original = currentPlan.exercises.find((base) => base.id === e.id || base.exerciseId === e.exerciseId);
@@ -331,6 +346,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         planIdAliases: [currentPlan.id],
         workoutDate,
         sessionSeconds: seconds,
+        notes: sessionNote.trim() || undefined,
+        warmupType: warmupType.trim() || undefined,
+        warmupMinutes: Number(warmupMinutes || 0) || undefined,
         lastUpdated: new Date().toISOString(),
         exercises: exercisesToSave,
         timers,
@@ -346,7 +364,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         console.warn('Auto-save draft failed', err);
       }
     },
-    [currentPlan, workoutDate, timers]
+    [currentPlan, workoutDate, timers, sessionNote, warmupType, warmupMinutes]
   );
 
   // Debounce auto-saving draft on changes
@@ -358,7 +376,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     }, 800);
 
     return () => clearTimeout(timer);
-  }, [sessionExercises, sessionSeconds, isDraftLoaded, saveDraftToStorage]);
+  }, [sessionExercises, sessionSeconds, sessionNote, warmupType, warmupMinutes, isDraftLoaded, saveDraftToStorage]);
 
   const formatTimer = (totalSec: number) => {
     const mins = Math.floor(totalSec / 60);
@@ -611,6 +629,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       isPartial: isPartial,
       entries: logEntries,
       remainingExercises: pendingExercises,
+      notes: sessionNote.trim() || undefined,
+      warmupType: warmupType.trim() || undefined,
+      warmupMinutes: Number(warmupMinutes || 0) || undefined,
       skippedExercises: skippedExercises.map((e) => ({
         exerciseId: e.exerciseId,
         exerciseName: e.name,
@@ -856,6 +877,21 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               <Pause className="w-3.5 h-3.5 text-slate-500" />
               <span>Pause & gem kladde</span>
             </button>
+
+            <div className="w-full grid grid-cols-1 sm:grid-cols-[1.4fr_120px] gap-2.5 mt-1">
+              <label className="block">
+                <span className="block text-[11px] font-bold text-slate-600 mb-1">Opvarmning (hvilken type)</span>
+                <input type="text" value={warmupType} onChange={(e) => setWarmupType(e.target.value)} placeholder="Fx cykel, løbebånd, romaskine..." className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
+              </label>
+              <label className="block">
+                <span className="block text-[11px] font-bold text-slate-600 mb-1">Tid (min)</span>
+                <input type="number" min="0" step="1" inputMode="numeric" value={warmupMinutes} onChange={(e) => setWarmupMinutes(e.target.value)} placeholder="0" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
+              </label>
+              <label className="block sm:col-span-2">
+                <span className="block text-[11px] font-bold text-slate-600 mb-1">Note til dagens træning</span>
+                <textarea value={sessionNote} onChange={(e) => setSessionNote(e.target.value)} placeholder="Fx træt i dag, øm i knæet, god energi..." rows={2} className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
+              </label>
+            </div>
 
             {/* Finish Workout CTA */}
             <button

@@ -109,6 +109,14 @@ export const StorageService = {
     return apiJson<CompletedSession[]>('/api/sessions');
   },
 
+  async updateCompletedSession(session: CompletedSession): Promise<void> {
+    await apiJson(`/api/sessions/${encodeURIComponent(session.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(session),
+    });
+  },
+
   async deleteCompletedSession(id: string): Promise<void> {
     await apiJson(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },

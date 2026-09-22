@@ -12,12 +12,14 @@ import {
   Search,
   Play,
   Trash2,
+  Pencil,
   ArrowLeft,
   List,
   Activity,
 } from 'lucide-react';
 import { CompletedSession, Exercise, ExerciseLogEntry } from '../types';
 import { ExerciseProgressModal } from './ExerciseProgressModal';
+import { EditCompletedSessionModal } from './EditCompletedSessionModal';
 import {
   ResponsiveContainer,
   LineChart,
@@ -37,6 +39,7 @@ interface HistoryLogViewProps {
   onResetToDefaults?: () => void;
   onResumeSession?: (session: CompletedSession) => void;
   onDeleteSession?: (sessionId: string) => void;
+  onUpdateSession?: (session: CompletedSession) => Promise<void> | void;
 }
 
 type HistoryMode = 'programs' | 'program' | 'all';
@@ -58,12 +61,14 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
   onResetToDefaults,
   onResumeSession,
   onDeleteSession,
+  onUpdateSession,
 }) => {
   const [mode, setMode] = useState<HistoryMode>('programs');
   const [selectedProgramKey, setSelectedProgramKey] = useState<string | null>(null);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [selectedExerciseForModal, setSelectedExerciseForModal] = useState<Exercise | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [editingSession, setEditingSession] = useState<CompletedSession | null>(null);
 
   const isScoreEntry = (entry: ExerciseLogEntry) =>
     entry.trackingMode === 'timed_score' || (entry.scoreResults?.length ?? 0) > 0;
@@ -318,6 +323,14 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
 
         {isExpanded && (
           <div className="border-t border-slate-100 bg-slate-50/60 p-3.5 sm:p-4 space-y-3">
+            {(session.warmupType || session.warmupMinutes || session.notes) && (
+              <div className="rounded-xl bg-white border border-slate-200 p-3 text-xs space-y-1.5">
+                {(session.warmupType || session.warmupMinutes) && (
+                  <div className="text-slate-700"><span className="font-bold">Opvarmning:</span> {session.warmupType || 'Ikke angivet'}{session.warmupMinutes ? ` · ${session.warmupMinutes} min` : ''}</div>
+                )}
+                {session.notes && <div className="text-slate-600"><span className="font-bold text-slate-700">Note:</span> {session.notes}</div>}
+              </div>
+            )}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
               {session.entries.map((entry) => {
                 const originalEx = exercises.find((e) => e.id === entry.exerciseId);
@@ -345,6 +358,11 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
               ))}
             </div>
             <div className="flex flex-wrap justify-end gap-2 pt-1">
+              {onUpdateSession && (
+                <button type="button" onClick={() => setEditingSession(session)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-blue-200 text-blue-700 text-xs font-bold">
+                  <Pencil className="w-3.5 h-3.5" /> Rediger pas
+                </button>
+              )}
               {onResumeSession && (
                 <button type="button" onClick={() => onResumeSession(session)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold">
                   <Play className="w-3.5 h-3.5 fill-current" /> {isPartial ? 'Gør færdig' : 'Start igen'}
@@ -514,6 +532,13 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
 
       {selectedExerciseForModal && (
         <ExerciseProgressModal exercise={selectedExerciseForModal} logs={logs} onClose={() => setSelectedExerciseForModal(null)} />
+      )}
+      {editingSession && onUpdateSession && (
+        <EditCompletedSessionModal
+          session={editingSession}
+          onClose={() => setEditingSession(null)}
+          onSave={onUpdateSession}
+        />
       )}
     </div>
   );
