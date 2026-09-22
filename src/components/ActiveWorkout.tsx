@@ -106,6 +106,22 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const freshExercisesForPlan = useCallback((plan: WorkoutPlan) => {
     return plan.exercises.map((pe) => {
       const baseEx = allExercises.find((e) => e.id === pe.exerciseId);
+
+      // Use the most recent completed registration from this same program as the
+      // starting load for a brand-new workout. This makes it easy to remember
+      // what was used last time without changing the saved program defaults.
+      // Prefer logs from the same plan; older logs without planId are only used
+      // as a fallback when no plan-specific history exists.
+      const exerciseLogs = allLogs
+        .filter((log) => log.exerciseId === pe.exerciseId)
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      const previousLog =
+        exerciseLogs.find((log) => log.planId === plan.id) ||
+        exerciseLogs.find((log) => !log.planId);
+
+      const isWeightedExercise = (pe.trackingMode || baseEx?.trackingMode || 'sets_reps_weight') === 'sets_reps_weight';
+      const shouldUseSeparateLegs = pe.separateLegs;
+
       return {
         ...pe,
         imageUrl: baseEx?.imageUrl || pe.imageUrl,
@@ -118,6 +134,16 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         scoreUnit: pe.scoreUnit ?? baseEx?.scoreUnit,
         lowerScoreIsBetter: pe.lowerScoreIsBetter ?? baseEx?.lowerScoreIsBetter,
         scorePerSide: pe.scorePerSide ?? baseEx?.scorePerSide,
+        ...(isWeightedExercise && previousLog
+          ? shouldUseSeparateLegs
+            ? {
+                leftLegWeightKg: previousLog.leftLegWeightKg ?? pe.leftLegWeightKg,
+                rightLegWeightKg: previousLog.rightLegWeightKg ?? pe.rightLegWeightKg,
+              }
+            : {
+                weightKg: previousLog.weightKg ?? pe.weightKg,
+              }
+          : {}),
         isCompleted: false,
         executionStatus: 'pending',
         skipReason: undefined,
@@ -125,7 +151,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         activeTimerSeconds: 0,
       } as PlanExercise;
     });
-  }, [allExercises]);
+  }, [allExercises, allLogs]);
 
   // Load the draft belonging to the selected plan only. Other unfinished workouts stay untouched.
   useEffect(() => {
@@ -300,37 +326,14 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     async (exercisesToSave: PlanExercise[], seconds: number) => {
       if (!currentPlan || exercisesToSave.length === 0) return;
 
-      const hasActivity =
-        seconds > 0 ||
-        sessionNote.trim().length > 0 ||
-        warmupType.trim().length > 0 ||
-        Number(warmupMinutes || 0) > 0 ||
-        Object.values(timers).some((timer) => Number(timer?.seconds || 0) > 0) ||
-        exercisesToSave.some((e) => {
-          const original = currentPlan.exercises.find((base) => base.id === e.id || base.exerciseId === e.exerciseId);
-          const changedFromPlan = original
-            ? e.sets !== original.sets ||
-              e.reps !== original.reps ||
-              e.weightKg !== original.weightKg ||
-              e.separateLegs !== original.separateLegs ||
-              e.leftLegWeightKg !== original.leftLegWeightKg ||
-              e.leftLegReps !== original.leftLegReps ||
-              e.rightLegWeightKg !== original.rightLegWeightKg ||
-              e.rightLegReps !== original.rightLegReps ||
-              e.durationSeconds !== original.durationSeconds ||
-              e.rounds !== original.rounds
-            : false;
-          return Boolean(
-            e.isCompleted ||
-            e.executionStatus === 'skipped' ||
-            (e.notes && e.notes.trim().length > 0) ||
-            (Array.isArray(e.scoreResults) && e.scoreResults.length > 0) ||
-            Number(e.activeTimerSeconds || 0) > 0 ||
-            changedFromPlan
-          );
-        });
+      // Do not create a draft merely because the user viewed a program, changed a field,
+      // wrote a note, registered warm-up, used a timer or marked an exercise as skipped.
+      // A draft becomes real only after at least one exercise has been completed.
+      const completedCount = exercisesToSave.filter(
+        (e) => e.isCompleted || e.executionStatus === 'completed'
+      ).length;
 
-      if (!hasActivity) return;
+      if (completedCount === 0) return;
 
       const draft: WorkoutDraft = {
         id: `draft-${currentPlan.id}`,
@@ -385,9 +388,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   };
 
   const toggleExerciseTimer = (exerciseId: string) => {
-    if (!isSessionTimerRunning && sessionSeconds === 0) {
-      setIsSessionTimerRunning(true);
-    }
+    // Exercise timers are independent from the overall workout timer.
+    // The workout timer starts only when the user explicitly presses Start.
 
     setTimers((prev) => {
       const current = prev[exerciseId] || { seconds: 0, isRunning: false };

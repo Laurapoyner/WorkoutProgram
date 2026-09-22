@@ -64,7 +64,9 @@ function stablePlanKeyForDraft(draft: any): string {
 }
 
 function draftCompletedCount(draft: any): number {
-  return Array.isArray(draft?.exercises) ? draft.exercises.filter((e: any) => Boolean(e?.isCompleted)).length : 0;
+  return Array.isArray(draft?.exercises)
+    ? draft.exercises.filter((e: any) => Boolean(e?.isCompleted) || e?.executionStatus === 'completed').length
+    : 0;
 }
 
 function draftActivityScore(draft: any): number {
@@ -439,6 +441,17 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   // the next time the app asks for drafts, so existing progress survives app upgrades.
   if (path === '/api/drafts' && method === 'GET') {
     await migrateLegacyWorkoutDrafts(db);
+
+    // Older versions could create a draft simply by opening a workout. Remove those
+    // 0-completed shells. Real in-progress drafts (1+ completed exercise) are untouched.
+    const allDraftDocs: any[] = await db.collection('drafts')
+      .find({ type: 'workout_draft' })
+      .toArray();
+    const emptyIds = allDraftDocs
+      .filter((d) => draftCompletedCount(normalizeWorkoutDraft(d.data, d.updatedAt)) === 0)
+      .map((d) => d._id);
+    if (emptyIds.length) await db.collection('drafts').deleteMany({ _id: { $in: emptyIds } });
+
     const docs: any[] = await db.collection('drafts')
       .find({ type: 'workout_draft' }, { projection: { _id: 0, data: 1, updatedAt: 1 } })
       .sort({ updatedAt: -1 })
@@ -451,6 +464,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     const draft = body?.draft;
     if (!draft?.planId) return json({ error: 'Draft og planId er påkrævet' }, 400);
     const normalized = normalizeWorkoutDraft({ ...draft, lastUpdated: new Date().toISOString() });
+
+    if (draftCompletedCount(normalized) === 0) {
+      return json({ success: true, draft: null, ignoredEmptyDraft: true, mode: 'mongodb' });
+    }
 
     const existing: any = await db.collection('drafts').findOne({
       type: 'workout_draft',
@@ -548,6 +565,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     const draft = body?.draft;
     if (!draft?.planId) return json({ error: 'Draft og planId er påkrævet' }, 400);
     const normalized = normalizeWorkoutDraft({ ...draft, lastUpdated: new Date().toISOString() });
+    if (draftCompletedCount(normalized) === 0) {
+      return json({ success: true, draft: null, ignoredEmptyDraft: true, mode: 'mongodb' });
+    }
     const existing: any = await db.collection('drafts').findOne({
       type: 'workout_draft',
       $or: [
