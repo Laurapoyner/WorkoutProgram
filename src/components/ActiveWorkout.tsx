@@ -120,7 +120,10 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         exerciseLogs.find((log) => !log.planId);
 
       const isWeightedExercise = (pe.trackingMode || baseEx?.trackingMode || 'sets_reps_weight') === 'sets_reps_weight';
-      const shouldUseSeparateLegs = pe.separateLegs;
+      // A brand-new workout should mirror the latest actually completed registration,
+      // including whether the exercise was split by leg and the reps used last time.
+      // This makes the fields a practical starting point without changing the plan defaults.
+      const shouldUseSeparateLegs = previousLog?.separateLegs ?? pe.separateLegs;
 
       return {
         ...pe,
@@ -137,10 +140,16 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         ...(isWeightedExercise && previousLog
           ? shouldUseSeparateLegs
             ? {
+                separateLegs: true,
+                reps: previousLog.reps || pe.reps,
                 leftLegWeightKg: previousLog.leftLegWeightKg ?? pe.leftLegWeightKg,
+                leftLegReps: previousLog.leftLegReps || previousLog.reps || pe.leftLegReps || pe.reps,
                 rightLegWeightKg: previousLog.rightLegWeightKg ?? pe.rightLegWeightKg,
+                rightLegReps: previousLog.rightLegReps || previousLog.reps || pe.rightLegReps || pe.reps,
               }
             : {
+                separateLegs: false,
+                reps: previousLog.reps || pe.reps,
                 weightKg: previousLog.weightKg ?? pe.weightKg,
               }
           : {}),
@@ -430,6 +439,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   };
 
   const handleToggleComplete = (exerciseId: string) => {
+    const exerciseBeforeToggle = sessionExercises.find((item) => item.id === exerciseId);
+    const wasCompleted = !!exerciseBeforeToggle && (exerciseBeforeToggle.executionStatus === 'completed' || exerciseBeforeToggle.isCompleted);
+
     if (timers[exerciseId]?.isRunning) {
       setTimers((prev) => ({
         ...prev,
@@ -457,6 +469,10 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         return item;
       })
     );
+
+    if (!wasCompleted) {
+      onToast?.(`${exerciseBeforeToggle?.name || 'Øvelsen'} er markeret som udført ✓`);
+    }
   };
 
   const markExerciseSkipped = (exerciseId: string, reason: 'time' | 'other', reasonText?: string) => {
@@ -1248,14 +1264,14 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Udført i dag
+                Udførte øvelser
               </h3>
               <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
                 {completedExercises.length} færdige
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Disse øvelser registreres i logbogen og databasen
+              Registreret i dette træningspas
             </p>
           </div>
 
@@ -1294,6 +1310,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                       ) : (
                         <span>{exercise.sets} sæt × {exercise.reps} • {exercise.weightKg ? `${exercise.weightKg} kg` : 'Kropsvægt'}</span>
                       )}
+                      {(timers[exercise.id]?.seconds || exercise.activeTimerSeconds) ? (
+                        <span className="ml-2 text-slate-400">· Tid: {formatTimer(timers[exercise.id]?.seconds || exercise.activeTimerSeconds || 0)}</span>
+                      ) : null}
                       {exercise.notes && <span className="italic ml-2 text-slate-400">"{exercise.notes}"</span>}
                     </p>
                   </div>

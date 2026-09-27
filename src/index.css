@@ -1,1 +1,11 @@
 @import "tailwindcss";
+
+/* iOS Safari zooms the page when an input with text smaller than 16px receives focus.
+   Keep the compact visual layout, but use a 16px input font on touch-size screens. */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}

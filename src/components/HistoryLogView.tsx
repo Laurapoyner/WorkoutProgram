@@ -345,6 +345,11 @@ export const HistoryLogView: React.FC<HistoryLogViewProps> = ({
                       )}
                     </div>
                     <div className="mt-1.5 text-slate-600">{renderEntryResults(entry)}</div>
+                    {entry.durationSeconds ? (
+                      <div className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-slate-500">
+                        <Clock className="w-3 h-3" /> Tid på øvelse: {formatDuration(entry.durationSeconds)}
+                      </div>
+                    ) : null}
                     {entry.notes && <p className="text-slate-500 italic mt-2 text-[11px]">“{entry.notes}”</p>}
                   </div>
                 );
