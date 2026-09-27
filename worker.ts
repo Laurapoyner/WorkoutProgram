@@ -23,25 +23,31 @@ async function openMongoDb(env: Env): Promise<{ client: MongoClient; db: Db }> {
 
   if (!uri) throw new Error('MONGODB_URI mangler i Cloudflare Worker secrets');
 
-  const client = new MongoClient(uri, {
-    serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
-    connectTimeoutMS: 8000,
-    serverSelectionTimeoutMS: 8000,
-    maxPoolSize: 1,
-    minPoolSize: 0,
-    maxConnecting: 1,
-    maxIdleTimeMS: 1000,
-  });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const client = new MongoClient(uri, {
+      serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
+      connectTimeoutMS: 9000,
+      serverSelectionTimeoutMS: 9000,
+      maxPoolSize: 1,
+      minPoolSize: 0,
+      maxConnecting: 1,
+      maxIdleTimeMS: 1000,
+    });
 
-  try {
-    await client.connect();
-    const db = client.db(dbName);
-    await db.command({ ping: 1 });
-    return { client, db };
-  } catch (err) {
-    await client.close().catch(() => undefined);
-    throw err;
+    try {
+      await client.connect();
+      const db = client.db(dbName);
+      await db.command({ ping: 1 });
+      return { client, db };
+    } catch (err) {
+      lastError = err;
+      await client.close().catch(() => undefined);
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
+
+  throw lastError;
 }
 
 function clean<T extends Record<string, any>>(value: T): T {
@@ -589,6 +595,45 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (path === '/api/active-draft' && method === 'DELETE') {
     await db.collection('drafts').deleteMany({ type: { $in: ['workout_draft', 'active_workout'] } });
     return json({ success: true, mode: 'mongodb' });
+  }
+
+  if (path === '/api/upload-images-batch' && method === 'POST') {
+    const body = await bodyJson(request);
+    const images = Array.isArray(body?.images) ? body.images : [];
+    if (!images.length) return json({ images: [] });
+    if (images.length > 30) return json({ error: 'Der kan højst uploades 30 billeder ad gangen.' }, 400);
+
+    const stored: Array<{ key: string; url: string }> = [];
+    for (const item of images) {
+      const key = String(item?.key || '');
+      const imageBase64 = String(item?.imageBase64 || '');
+      if (!key || !imageBase64) continue;
+      if (/^https?:\/\//i.test(imageBase64)) {
+        stored.push({ key, url: imageBase64 });
+        continue;
+      }
+
+      const matches = imageBase64.match(/^data:([A-Za-z0-9.+/-]+);base64,(.+)$/);
+      if (!matches) return json({ error: `Billede ${key} er ikke en gyldig base64 data-URL.` }, 400);
+
+      const mimeType = matches[1];
+      const buffer = Buffer.from(matches[2], 'base64');
+      if (buffer.length > 8 * 1024 * 1024) return json({ error: `Billede ${key} er for stort.` }, 413);
+      const imageId = `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const safeFilename = typeof item?.filename === 'string' ? item.filename.split(/[\\/]/).pop() : undefined;
+
+      await db.collection('images').insertOne({
+        id: imageId,
+        filename: safeFilename || imageId,
+        mimeType,
+        data: buffer,
+        size: buffer.length,
+        createdAt: new Date().toISOString(),
+      });
+      stored.push({ key, url: `/api/images/${imageId}` });
+    }
+
+    return json({ success: true, images: stored, mode: 'mongodb' });
   }
 
   if (path === '/api/upload-image' && method === 'POST') {

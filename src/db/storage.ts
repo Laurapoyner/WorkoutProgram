@@ -2,19 +2,37 @@ import { Exercise, WorkoutPlan, ExerciseLogEntry, CompletedSession, WorkoutDraft
 import { INITIAL_EXERCISES, INITIAL_PLANS, INITIAL_LOGS } from './defaultData';
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(url, init);
-  } catch {
-    throw new Error('Kan ikke kontakte serveren. Tjek internetforbindelsen og prøv igen.');
-  }
+  const retryableStatuses = new Set([502, 503, 504]);
+  const maxAttempts = 3;
+  let lastError: Error | null = null;
 
-  if (!res.ok) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch {
+      lastError = new Error('Kan ikke kontakte serveren. Tjek internetforbindelsen og prøv igen.');
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+        continue;
+      }
+      throw lastError;
+    }
+
+    if (res.ok) return res.json() as Promise<T>;
+
     const body = await res.json().catch(() => ({ error: `Serverfejl (${res.status})` }));
-    throw new Error(body.error || `Serverfejl (${res.status})`);
+    lastError = new Error(body.error || `Serverfejl (${res.status})`);
+
+    if (retryableStatuses.has(res.status) && attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      continue;
+    }
+
+    throw lastError;
   }
 
-  return res.json() as Promise<T>;
+  throw lastError || new Error('Ukendt serverfejl');
 }
 
 /**
@@ -168,6 +186,16 @@ export const StorageService = {
     });
     if (!json.url) throw new Error('Serveren returnerede ingen billedadresse.');
     return json.url;
+  },
+
+  async uploadImagesBatch(images: Array<{ key: string; imageBase64: string; filename?: string }>): Promise<Record<string, string>> {
+    if (!images.length) return {};
+    const json = await apiJson<{ images: Array<{ key: string; url: string }> }>('/api/upload-images-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ images }),
+    });
+    return Object.fromEntries((json.images || []).map((item) => [item.key, item.url]));
   },
 
   async resetToDefaults(): Promise<void> {

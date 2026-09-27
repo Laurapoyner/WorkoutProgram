@@ -147,6 +147,7 @@ export const ExorLivePdfImportModal: React.FC<Props> = ({ exercises, onSaveExerc
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
 
   const handleFile = async (file: File) => {
     setIsParsing(true);
@@ -170,16 +171,32 @@ export const ExorLivePdfImportModal: React.FC<Props> = ({ exercises, onSaveExerc
     if (!items.length) return;
     setIsImporting(true);
     setError(null);
+    let currentStep = 'Forbereder import…';
+    setImportProgress(currentStep);
+
     try {
       const importedExercises: Exercise[] = [];
       const stamp = Date.now();
-      for (const item of items) {
+
+      currentStep = `Uploader ${items.filter((item) => item.imageDataUrl).length} billeder…`;
+      setImportProgress(currentStep);
+      const imageUrls = await StorageService.uploadImagesBatch(
+        items
+          .filter((item) => item.imageDataUrl)
+          .map((item) => ({
+            key: String(item.number),
+            imageBase64: item.imageDataUrl!,
+            filename: `exorlive-${item.number}.jpg`,
+          })),
+      );
+
+      for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+        const item = items[itemIndex];
+        currentStep = `Gemmer øvelse ${itemIndex + 1} af ${items.length}: ${item.name}`;
+        setImportProgress(currentStep);
         const normalizedName = item.name.replace(/^\d+\.\s*/, '').trim().toLowerCase();
         const existing = exercises.find((ex) => ex.name.replace(/^\d+\.\s*/, '').trim().toLowerCase() === normalizedName);
-        let imageUrl = existing?.imageUrl;
-        if (item.imageDataUrl) {
-          imageUrl = await StorageService.uploadImage(item.imageDataUrl, `exorlive-${item.number}.jpg`);
-        }
+        const imageUrl = imageUrls[String(item.number)] || existing?.imageUrl;
         const exercise: Exercise = {
           id: existing?.id || `ex-import-${stamp}-${item.number}`,
           name: `${item.number}. ${item.name.replace(/^\d+\.\s*/, '')}`,
@@ -222,6 +239,8 @@ export const ExorLivePdfImportModal: React.FC<Props> = ({ exercises, onSaveExerc
         trackingMode: ex.trackingMode,
       }));
 
+      currentStep = 'Gemmer træningsprogrammet…';
+      setImportProgress(currentStep);
       await onSavePlan({
         id: `plan-exorlive-${stamp}`,
         title: planTitle.trim() || 'Importeret ExorLive program',
@@ -232,9 +251,10 @@ export const ExorLivePdfImportModal: React.FC<Props> = ({ exercises, onSaveExerc
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
+      setImportProgress('Færdig');
       setDone(true);
     } catch (err: any) {
-      setError(err?.message || 'Importen fejlede.');
+      setError(`${currentStep} — ${err?.message || 'Importen fejlede.'}`);
     } finally {
       setIsImporting(false);
     }
@@ -281,7 +301,7 @@ export const ExorLivePdfImportModal: React.FC<Props> = ({ exercises, onSaveExerc
                   </div>
                 ))}
               </div>
-              <div className="flex justify-end gap-2 pt-2"><button onClick={onClose} className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100">Annuller</button><button onClick={importAll} disabled={isImporting} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-2">{isImporting && <Loader2 className="w-4 h-4 animate-spin" />}{isImporting ? 'Importerer…' : 'Opret program + øvelser'}</button></div>
+              {isImporting && importProgress && <div className="text-xs text-blue-600 font-semibold pt-1">{importProgress}</div>}<div className="flex justify-end gap-2 pt-2"><button onClick={onClose} className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100">Annuller</button><button onClick={importAll} disabled={isImporting} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-2">{isImporting && <Loader2 className="w-4 h-4 animate-spin" />}{isImporting ? 'Importerer…' : 'Opret program + øvelser'}</button></div>
             </>
           )}
 
