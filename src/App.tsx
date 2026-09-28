@@ -25,7 +25,7 @@ import {
   RefreshCw,
   AlertCircle,
 } from 'lucide-react';
-import { StorageService } from './db/storage';
+import { StorageService, SyncStatus } from './db/storage';
 import { Exercise, WorkoutPlan, ExerciseLogEntry, CompletedSession } from './types';
 import { INITIAL_EXERCISES, INITIAL_PLANS, INITIAL_LOGS } from './db/defaultData';
 import { ActiveWorkout } from './components/ActiveWorkout';
@@ -41,6 +41,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => StorageService.getSyncStatus());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [isAddExerciseModalOpen, setIsAddExerciseModalOpen] = useState(false);
@@ -69,26 +70,15 @@ export default function App() {
   const syncWithDatabase = async (silent = false) => {
     if (!silent) setIsSyncing(true);
     try {
-      // 1. Refresh DB connection status
-      try {
-        const statusRes = await fetch('/api/db-status');
-        if (statusRes.ok) {
-          const st = await statusRes.json();
-          setDbStatus(st);
-        }
-      } catch {}
+      // One combined state request instead of several separate API calls.
+      // StorageService falls back to IndexedDB automatically when offline.
+      const state = await StorageService.getDatabaseState({ remoteFirst: true });
+      const loadedExercises = state.exercises;
+      const loadedPlans = state.plans;
+      const loadedLogs = state.logs;
+      const loadedSessions = state.sessions;
 
-      // 2. Load all latest data from backend / MongoDB Atlas
-      const [loadedExercises, loadedPlans, loadedLogs, loadedSessions] = await Promise.all([
-        StorageService.getExercises(),
-        StorageService.getPlans(),
-        StorageService.getLogs(),
-        StorageService.getCompletedSessions(),
-      ]);
-
-      if (loadedExercises && loadedExercises.length > 0) {
-        setExercises(loadedExercises);
-      }
+      if (loadedExercises && loadedExercises.length > 0) setExercises(loadedExercises);
       if (loadedPlans && loadedPlans.length > 0) {
         setPlans(loadedPlans);
         setActivePlanId((curr) => {
@@ -99,7 +89,8 @@ export default function App() {
       if (loadedLogs) setLogs(loadedLogs);
       if (loadedSessions) setSessions(loadedSessions);
 
-      setLastSyncedAt(new Date());
+      const currentSyncStatus = StorageService.getSyncStatus();
+      if (currentSyncStatus.lastSyncedAt) setLastSyncedAt(new Date(currentSyncStatus.lastSyncedAt));
     } catch (err) {
       console.error('Error synchronizing database', err);
       if (!silent) {
@@ -124,7 +115,17 @@ export default function App() {
           .catch(() => {});
 
         await StorageService.init();
-        await syncWithDatabase(false);
+        const state = await StorageService.getDatabaseState({ remoteFirst: false });
+        if (state.exercises?.length) setExercises(state.exercises);
+        if (state.plans?.length) {
+          setPlans(state.plans);
+          setActivePlanId((curr) => state.plans.some((p) => p.id === curr) ? curr : state.plans[0].id);
+        }
+        if (state.logs) setLogs(state.logs);
+        if (state.sessions) setSessions(state.sessions);
+        const currentSyncStatus = StorageService.getSyncStatus();
+        if (currentSyncStatus.lastSyncedAt) setLastSyncedAt(new Date(currentSyncStatus.lastSyncedAt));
+        setIsLoading(false);
       } catch (err) {
         console.error('Error during init', err);
         setIsLoading(false);
@@ -133,32 +134,28 @@ export default function App() {
     init();
   }, []);
 
-  // 2. Cross-Device Synchronization:
-  // - Polls every 12 seconds so phone & computer remain constantly synchronized
-  // - Also immediately syncs whenever user switches back to this browser tab (document.visibilitychange)
+  // 2. Offline-first synchronization.
+  // We no longer poll Cloudflare every 12 seconds. That created thousands of requests
+  // and unnecessary CPU usage. We sync when the app becomes active, when the device
+  // comes online again, or when the user explicitly presses Sync.
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        syncWithDatabase(true);
-      }
-    };
+    const unsubscribe = StorageService.subscribeSyncStatus((status) => {
+      setSyncStatus(status);
+      if (status.lastSyncedAt) setLastSyncedAt(new Date(status.lastSyncedAt));
+    });
 
-    const handleFocus = () => {
-      syncWithDatabase(true);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncWithDatabase(true);
     };
+    const handleOnline = () => syncWithDatabase(true);
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-
-    // Periodic polling every 12s
-    const pollInterval = setInterval(() => {
-      syncWithDatabase(true);
-    }, 12000);
+    window.addEventListener('online', handleOnline);
 
     return () => {
+      unsubscribe();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-      clearInterval(pollInterval);
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
 
@@ -176,18 +173,13 @@ export default function App() {
           error: null,
         });
         showToast('MongoDB Atlas tilsluttet succesfuldt!');
-        // Refresh data
+        // Refresh data with one combined request.
         await StorageService.init();
-        const [loadedExercises, loadedPlans, loadedLogs, loadedSessions] = await Promise.all([
-          StorageService.getExercises(),
-          StorageService.getPlans(),
-          StorageService.getLogs(),
-          StorageService.getCompletedSessions(),
-        ]);
-        if (loadedExercises?.length) setExercises(loadedExercises);
-        if (loadedPlans?.length) setPlans(loadedPlans);
-        if (loadedLogs?.length) setLogs(loadedLogs);
-        if (loadedSessions) setSessions(loadedSessions);
+        const state = await StorageService.getDatabaseState({ remoteFirst: true });
+        if (state.exercises?.length) setExercises(state.exercises);
+        if (state.plans?.length) setPlans(state.plans);
+        if (state.logs?.length) setLogs(state.logs);
+        if (state.sessions) setSessions(state.sessions);
       } else {
         setDbStatus((prev) => ({
           type: 'mongodb',
@@ -221,7 +213,7 @@ export default function App() {
       if (existingIndex >= 0) updatedPlans[existingIndex] = plan;
       else updatedPlans.push(plan);
       setPlans(updatedPlans);
-      showToast(`Træningsplanen "${plan.title}" blev gemt i MongoDB!`);
+      showToast(`Træningsplanen "${plan.title}" er gemt${syncStatus.pending > 0 ? " lokalt og synkroniseres automatisk" : ""}.`);
     } catch (err: any) {
       showToast(`Planen blev ikke gemt: ${err.message || 'databasefejl'}`);
       throw err;
@@ -234,7 +226,7 @@ export default function App() {
       const updated = plans.filter((p) => p.id !== planId);
       setPlans(updated);
       if (activePlanId === planId && updated.length > 0) setActivePlanId(updated[0].id);
-      showToast('Træningsplan slettet fra MongoDB');
+      showToast('Træningsplanen er slettet lokalt og synkroniseres automatisk.');
     } catch (err: any) {
       showToast(`Planen blev ikke slettet: ${err.message || 'databasefejl'}`);
     }
@@ -277,7 +269,7 @@ export default function App() {
           scorePerSide: savedEx.scorePerSide ?? pe.scorePerSide,
         } : pe),
       })));
-      showToast(`Øvelsen "${savedEx.name}" blev gemt i MongoDB Atlas!`);
+      showToast(`Øvelsen "${savedEx.name}" er gemt${syncStatus.pending > 0 ? " lokalt og synkroniseres automatisk" : ""}.`);
     } catch (err: any) {
       console.error('Fejl ved gemning af øvelse:', err);
       showToast(`Fejl ved gemning i databasen: ${err.message || 'Ukendt fejl'}`);
@@ -289,7 +281,7 @@ export default function App() {
     try {
       await StorageService.deleteExercise(id);
       setExercises((prev) => prev.filter((e) => e.id !== id));
-      showToast('Øvelsen blev slettet fra MongoDB Atlas');
+      showToast('Øvelsen er slettet lokalt og synkroniseres automatisk.');
     } catch (err: any) {
       showToast(`Fejl ved sletning: ${err.message}`);
     }
@@ -304,7 +296,7 @@ export default function App() {
       showToast(
         session.isPartial
           ? `Delvist pas gemt (${session.exercisesCompletedCount} øvelser). Du kan genoptage det når som helst fra tabellen!`
-          : `Flot klaret! Dagens pas blev gemt med ${session.exercisesCompletedCount} øvelser i databasen.`
+          : `Flot klaret! Dagens pas blev gemt med ${session.exercisesCompletedCount} øvelser${syncStatus.pending > 0 ? " lokalt og synkroniseres automatisk" : ""}.`
       );
       setActiveTab('history');
     } catch (err: any) {
@@ -622,17 +614,32 @@ export default function App() {
             {/* Live Cross-Device Sync Indicator & Manual Refresh Button */}
             <button
               id="topbar-btn-sync"
-              onClick={() => {
-                syncWithDatabase(false);
-                showToast('Synkroniserer med databasen...');
+              onClick={async () => {
+                setIsSyncing(true);
+                const result = await StorageService.flushPendingChanges();
+                await syncWithDatabase(true);
+                setIsSyncing(false);
+                showToast(result.pending > 0 ? `${result.pending} ændringer venter stadig på internet/server` : 'Alt er synkroniseret');
               }}
-              disabled={isSyncing}
-              title="Synkroniser på tværs af enheder (mobil & PC)"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              disabled={isSyncing || syncStatus.syncing}
+              title={syncStatus.online ? 'Synkroniser på tværs af enheder' : 'Offline – ændringer gemmes på denne enhed'}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50 ${
+                !syncStatus.online
+                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                  : syncStatus.pending > 0
+                    ? 'border-blue-200 bg-blue-50 text-blue-800'
+                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
+              }`}
             >
-              <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${!syncStatus.online ? 'text-amber-600' : 'text-blue-600'} ${(isSyncing || syncStatus.syncing) ? 'animate-spin' : ''}`} />
               <span className="hidden md:inline">
-                {isSyncing ? 'Synkroniserer...' : 'Synkroniser'}
+                {(isSyncing || syncStatus.syncing)
+                  ? 'Synkroniserer...'
+                  : !syncStatus.online
+                    ? `Offline${syncStatus.pending ? ` · ${syncStatus.pending} venter` : ''}`
+                    : syncStatus.pending > 0
+                      ? `${syncStatus.pending} venter`
+                      : 'Synkroniseret'}
               </span>
             </button>
 
@@ -676,6 +683,31 @@ export default function App() {
 
         {/* MAIN BODY CONTENT */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+          {(!syncStatus.online || syncStatus.pending > 0) && (
+            <div className={`mb-4 rounded-xl border px-3 py-2.5 text-xs font-semibold flex items-center justify-between gap-3 ${
+              !syncStatus.online
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-blue-50 border-blue-200 text-blue-900'
+            }`}>
+              <div className="min-w-0">
+                {!syncStatus.online
+                  ? `Offline – ændringer gemmes sikkert på denne enhed${syncStatus.pending ? ` · ${syncStatus.pending} venter på synkronisering` : ''}`
+                  : `${syncStatus.pending} ændring${syncStatus.pending === 1 ? '' : 'er'} gemt lokalt og venter på synkronisering`}
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const result = await StorageService.flushPendingChanges();
+                  if (result.pending === 0) await syncWithDatabase(true);
+                }}
+                disabled={!syncStatus.online || syncStatus.syncing}
+                className="shrink-0 rounded-lg bg-white/80 border border-current/15 px-2.5 py-1.5 disabled:opacity-50"
+              >
+                {syncStatus.syncing ? 'Synkroniserer…' : 'Synkroniser nu'}
+              </button>
+            </div>
+          )}
+
           {/* Toast Notification */}
           {toastMessage && (
             <div className="fixed bottom-6 right-6 z-50 bg-blue-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2.5 text-xs font-semibold animate-in fade-in slide-in-from-bottom-3 duration-300">
